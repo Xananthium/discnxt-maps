@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "saint-martins-cemetery-public-viewer",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-07-29",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": false
+  }
+}
+

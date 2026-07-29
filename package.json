@@ -1,0 +1,32 @@
+{
+  "name": "saint-martins-cemetery-public-viewer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local public-viewer prototype for a governed metric cemetery release.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.mjs",
+    "build:opennext": "opennextjs-cloudflare build",
+    "preview:opennext": "opennextjs-cloudflare build && opennextjs-cloudflare preview"
+  },
+  "dependencies": {
+    "next": "16.2.12",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@opennextjs/cloudflare": "1.20.2",
+    "@types/node": "26.1.2",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "typescript": "6.0.3",
+    "wrangler": "4.115.0"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "packageManager": "npm@11.6.0"
+}
