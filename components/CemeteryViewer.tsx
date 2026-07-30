@@ -67,7 +67,7 @@ const CAMERA_PRESETS: readonly CameraPreset[] = [
     label: "North oblique",
     longitude: -80.03835,
     latitude: 40.4501,
-    height: 205,
+    height: 430,
     heading: 180,
     pitch: -31
   },
@@ -76,18 +76,18 @@ const CAMERA_PRESETS: readonly CameraPreset[] = [
     label: "South oblique",
     longitude: -80.03835,
     latitude: 40.44615,
-    height: 195,
+    height: 430,
     heading: 0,
-    pitch: -30
+    pitch: -31
   },
   {
     id: "east-edge",
     label: "East edge",
     longitude: -80.03555,
     latitude: 40.44805,
-    height: 175,
+    height: 420,
     heading: 270,
-    pitch: -29
+    pitch: -27
   }
 ] as const;
 

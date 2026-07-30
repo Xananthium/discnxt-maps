@@ -181,6 +181,9 @@ test("camera bookmarks and Cesium runtime are deterministic and pinned", async (
   ]) {
     assert.match(component, new RegExp(`id: "${bookmark}"`));
   }
+  assert.match(component, /id: "north-oblique"[\s\S]*?height: 430/);
+  assert.match(component, /id: "south-oblique"[\s\S]*?height: 430/);
+  assert.match(component, /id: "east-edge"[\s\S]*?height: 420/);
   assert.match(component, /2026-07-29T18:00:00Z/);
   assert.match(environment, /releases\/1\.143\/Build\/Cesium\/Cesium\.js/);
 });
