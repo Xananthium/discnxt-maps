@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import json
 import math
@@ -73,7 +74,7 @@ CREATE TABLE edges (
     )),
     target_id TEXT NOT NULL REFERENCES nodes(id),
     metadata_json TEXT NOT NULL,
-    PRIMARY KEY (source_id, relation, target_id)
+    PRIMARY KEY (source_id, relation, target_id, metadata_json)
 ) WITHOUT ROWID;
 """
 
@@ -117,6 +118,25 @@ def _valid_sha256(value: object) -> bool:
     )
 
 
+def _capture_date(value: object) -> str:
+    try:
+        parsed = dt.date.fromisoformat(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("capture epoch must be an ISO calendar date") from exc
+    if parsed.isoformat() != value:
+        raise ValueError("capture epoch must be an ISO calendar date")
+    return value
+
+
+def _content_media_type(path: str) -> str:
+    suffix = PurePosixPath(path).suffix.lower()
+    return {
+        ".glb": "model/gltf-binary",
+        ".gltf": "model/gltf+json",
+        ".json": "application/json",
+    }.get(suffix, "application/octet-stream")
+
+
 def _relative_path(value: object) -> str:
     if not isinstance(value, str) or not value or "\\" in value:
         raise ValueError(f"invalid relative asset path: {value!r}")
@@ -135,8 +155,14 @@ def _relative_path(value: object) -> str:
 
 def _tileset_content_uris(tile: dict) -> list[str]:
     uris = []
-    content = tile.get("content")
-    if content is not None:
+    contents = []
+    if tile.get("content") is not None:
+        contents.append(tile["content"])
+    declared_contents = tile.get("contents", [])
+    if not isinstance(declared_contents, list):
+        raise ValueError("tileset contents must be a list")
+    contents.extend(declared_contents)
+    for content in contents:
         if not isinstance(content, dict) or "uri" not in content:
             raise ValueError("tileset content must have a uri")
         uris.append(_relative_path(content["uri"]))
@@ -187,33 +213,30 @@ def extract_facts(source: dict) -> dict:
         if observed != declared["sha256"] or len(raw[name]) != declared["bytes"]:
             raise ValueError(f"accepted identity mismatch for {name}")
 
-    content_assets = sorted(
-        (
-            {
-                "path": path,
-                "bytes": asset["bytes"],
-                "sha256": asset["sha256"],
-            }
-            for path, asset in assets_by_path.items()
-            if path.endswith(".b3dm")
-        ),
-        key=lambda asset: asset["path"],
-    )
-    declared_content_count = asset_manifest.get("content_assets")
-    if (
-        declared_content_count != len(content_assets)
-        or release.get("content_assets") != len(content_assets)
-    ):
-        raise ValueError("content asset count does not close")
-
     root = tileset.get("root")
     if not isinstance(root, dict):
         raise ValueError("tileset root must be an object")
     content_uris = _tileset_content_uris(root)
     if len(content_uris) != len(set(content_uris)):
         raise ValueError("tileset contains duplicate content URIs")
-    if set(content_uris) != {asset["path"] for asset in content_assets}:
-        raise ValueError("tileset content URIs do not close over accepted assets")
+    content_assets = []
+    for path in sorted(content_uris):
+        asset = assets_by_path.get(path)
+        if asset is None:
+            raise ValueError(f"tileset content is absent from accepted assets: {path}")
+        content_assets.append(
+            {
+                "path": path,
+                "bytes": asset["bytes"],
+                "sha256": asset["sha256"],
+            }
+        )
+    declared_content_count = asset_manifest.get("content_assets")
+    if (
+        declared_content_count != len(content_assets)
+        or release.get("content_assets") != len(content_assets)
+    ):
+        raise ValueError("content asset count does not close")
 
     transform = root.get("transform")
     if (
@@ -244,8 +267,7 @@ def extract_facts(source: dict) -> dict:
 
     if not _valid_sha256(release.get("source_manifest_sha256")):
         raise ValueError("release source manifest identity is invalid")
-    if release.get("capture_date") != "2026-07-29":
-        raise ValueError("unexpected capture epoch")
+    _capture_date(release.get("capture_date"))
     if release.get("content_license") != "CC BY 4.0":
         raise ValueError("unexpected content license")
 
@@ -487,7 +509,7 @@ def graph_records(source: dict) -> tuple[list[tuple], list[tuple], dict]:
             "text/html",
             None,
             None,
-            canonical_json({"attribution": release["attribution"]}),
+            canonical_json({}),
         ),
         (
             source_node,
@@ -560,13 +582,13 @@ def graph_records(source: dict) -> tuple[list[tuple], list[tuple], dict]:
             (
                 node_id,
                 "content_asset",
-                asset["path"],
-                urljoin(base_url, asset["path"]),
-                "application/octet-stream",
+                asset["sha256"],
+                None,
+                None,
                 asset["bytes"],
                 asset["sha256"],
                 canonical_json(
-                    {"format": "b3dm", "path": asset["path"]}
+                    {"identity_algorithm": "sha256"}
                 ),
             )
         )
@@ -631,7 +653,13 @@ def graph_records(source: dict) -> tuple[list[tuple], list[tuple], dict]:
                 tileset_node,
                 "references",
                 node_id,
-                canonical_json({"content_uri": path}),
+                canonical_json(
+                    {
+                        "content_uri": path,
+                        "media_type": _content_media_type(path),
+                        "url": urljoin(base_url, path),
+                    }
+                ),
             )
         )
     for key, node_id in sorted(validator_nodes.items()):
@@ -677,21 +705,77 @@ def graph_records(source: dict) -> tuple[list[tuple], list[tuple], dict]:
     return sorted(nodes), sorted(edges), projection
 
 
+def _merge_records(records: list[tuple], label: str) -> list[tuple]:
+    merged = {}
+    for record in records:
+        key = record[0] if label == "node" else record
+        existing = merged.get(key)
+        if existing is not None and existing != record:
+            raise ValueError(f"conflicting {label} record: {key}")
+        merged[key] = record
+    return sorted(merged.values())
+
+
+def catalog_records(sources: list[dict]) -> tuple[list[tuple], list[tuple], dict]:
+    if not sources:
+        raise ValueError("at least one accepted release source is required")
+
+    nodes = []
+    edges = []
+    releases = {}
+    for source in sorted(sources, key=lambda item: item["base_url"]):
+        source_nodes, source_edges, projection = graph_records(source)
+        release_id = projection["release_id"]
+        existing = releases.get(release_id)
+        if existing is not None and existing != projection:
+            raise ValueError(f"conflicting release projection: {release_id}")
+        releases[release_id] = projection
+        nodes.extend(source_nodes)
+        edges.extend(source_edges)
+
+    projection = {
+        "releases": sorted(
+            releases.values(),
+            key=lambda release: (
+                release["capture_date"],
+                release["release_id"],
+            ),
+        ),
+        "schema_version": 2,
+    }
+    return (
+        _merge_records(nodes, "node"),
+        _merge_records(edges, "edge"),
+        projection,
+    )
+
+
 def _write_database(
     database_path: Path,
-    source: dict,
+    sources: list[dict],
     nodes: list[tuple],
     edges: list[tuple],
 ) -> None:
     metadata = [
-        ("catalog_schema_version", canonical_json(1)),
+        ("catalog_schema_version", canonical_json(2)),
         (
             "source_urls",
             canonical_json(
-                {
-                    name: urljoin(source["base_url"], name)
-                    for name in MANIFEST_NAMES
-                }
+                [
+                    {
+                        "base_url": source["base_url"],
+                        "release_id": source["documents"]["release.json"][
+                            "release_id"
+                        ],
+                        "manifests": {
+                            name: urljoin(source["base_url"], name)
+                            for name in MANIFEST_NAMES
+                        },
+                    }
+                    for source in sorted(
+                        sources, key=lambda item: item["base_url"]
+                    )
+                ]
             ),
         ),
     ]
@@ -734,9 +818,17 @@ def _write_database(
         connection.close()
 
 
-def build_catalog(output_dir: Path, source: dict | None = None) -> dict:
-    source = source or fetch_manifests()
-    nodes, edges, projection = graph_records(source)
+def build_catalog(
+    output_dir: Path,
+    source: dict | list[dict] | tuple[dict, ...] | None = None,
+) -> dict:
+    if source is None:
+        sources = [fetch_manifests()]
+    elif isinstance(source, dict):
+        sources = [source]
+    else:
+        sources = list(source)
+    nodes, edges, projection = catalog_records(sources)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     database_path = output_dir / "catalog.sqlite3"
@@ -759,7 +851,7 @@ def build_catalog(output_dir: Path, source: dict | None = None) -> dict:
             encoding="utf-8",
             newline="\n",
         )
-        _write_database(temporary_database, source, nodes, edges)
+        _write_database(temporary_database, sources, nodes, edges)
         temporary_database.replace(database_path)
         temporary_projection.replace(projection_path)
     finally:
@@ -767,11 +859,14 @@ def build_catalog(output_dir: Path, source: dict | None = None) -> dict:
         temporary_projection.unlink(missing_ok=True)
 
     return {
-        "content_bytes": projection["content_bytes"],
+        "content_bytes": sum(
+            release["content_bytes"] for release in projection["releases"]
+        ),
         "database": str(database_path),
         "edges": len(edges),
         "json": str(projection_path),
         "nodes": len(nodes),
+        "releases": len(projection["releases"]),
     }
 
 
@@ -784,8 +879,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--base-url",
-        default=DEFAULT_BASE_URL,
-        help="Directory URL containing the three accepted manifests.",
+        action="append",
+        dest="base_urls",
+        help=(
+            "Directory URL containing one accepted release's three manifests. "
+            "Repeat for every release; defaults to the published baseline."
+        ),
     )
     parser.add_argument(
         "--output",
@@ -794,8 +893,9 @@ def main() -> None:
         help="Directory for catalog.sqlite3 and catalog.json.",
     )
     arguments = parser.parse_args()
-    source = fetch_manifests(arguments.base_url)
-    print(canonical_json(build_catalog(arguments.output, source)))
+    base_urls = arguments.base_urls or [DEFAULT_BASE_URL]
+    sources = [fetch_manifests(base_url) for base_url in base_urls]
+    print(canonical_json(build_catalog(arguments.output, sources)))
 
 
 if __name__ == "__main__":

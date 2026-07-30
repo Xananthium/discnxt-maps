@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import importlib.util
 import json
@@ -42,9 +43,10 @@ class AssetCatalogTests(unittest.TestCase):
         cls.summary = catalog.build_catalog(cls.output_dir, cls.source)
         cls.database_path = cls.output_dir / "catalog.sqlite3"
         cls.projection_path = cls.output_dir / "catalog.json"
-        cls.projection = json.loads(
+        cls.catalog_projection = json.loads(
             cls.projection_path.read_text(encoding="utf-8")
         )
+        cls.projection = cls.catalog_projection["releases"][0]
 
     @classmethod
     def tearDownClass(cls):
@@ -70,6 +72,27 @@ class AssetCatalogTests(unittest.TestCase):
         )
         self.assertFalse(
             any(url.lower().endswith(".b3dm") for url in observed_urls)
+        )
+
+    def test_capture_epoch_accepts_future_iso_dates_and_rejects_ambiguous_values(self):
+        self.assertEqual(catalog._capture_date("2031-04-05"), "2031-04-05")
+        for value in (None, "", "2031-4-5", "20310405", "2031-W14-6"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "ISO calendar date"):
+                    catalog._capture_date(value)
+
+    def test_tileset_content_enumeration_accepts_direct_glb(self):
+        root = {
+            "contents": [{"uri": "LOD-0/a.glb"}],
+            "children": [{"content": {"uri": "LOD-1/b.b3dm"}}],
+        }
+        self.assertEqual(
+            catalog._tileset_content_uris(root),
+            ["LOD-0/a.glb", "LOD-1/b.b3dm"],
+        )
+        self.assertEqual(
+            catalog._content_media_type("LOD-0/a.glb"),
+            "model/gltf-binary",
         )
 
     def test_graph_is_closed_and_contains_only_asset_domain_state(self):
@@ -144,17 +167,25 @@ class AssetCatalogTests(unittest.TestCase):
                 )
                 for asset in self.facts["content_assets"]
             }
-            database_assets = {
-                name: (byte_count, sha256, uri)
-                for name, byte_count, sha256, uri in connection.execute(
-                    """
-                    SELECT name, bytes, sha256, uri
-                    FROM nodes
-                    WHERE kind = 'content_asset'
-                    ORDER BY name
-                    """
+            database_assets = {}
+            for byte_count, sha256, uri, metadata_json in connection.execute(
+                """
+                SELECT target.bytes, target.sha256, target.uri, edge.metadata_json
+                FROM edges edge
+                JOIN nodes source ON source.id = edge.source_id
+                JOIN nodes target ON target.id = edge.target_id
+                WHERE edge.relation = 'references'
+                  AND source.kind = 'tileset'
+                  AND target.kind = 'content_asset'
+                """
+            ):
+                metadata = json.loads(metadata_json)
+                self.assertIsNone(uri)
+                database_assets[metadata["content_uri"]] = (
+                    byte_count,
+                    sha256,
+                    metadata["url"],
                 )
-            }
             self.assertEqual(database_assets, manifest_assets)
 
             referenced_paths = {
@@ -243,6 +274,8 @@ class AssetCatalogTests(unittest.TestCase):
             self.projection["content_bytes"],
             sum(asset["bytes"] for asset in self.facts["content_assets"]),
         )
+        self.assertEqual(self.catalog_projection["schema_version"], 2)
+        self.assertEqual(len(self.catalog_projection["releases"]), 1)
 
     def test_fixed_site_enu_round_trips_through_ecef(self):
         spatial = self.projection["spatial"]
@@ -312,6 +345,107 @@ class AssetCatalogTests(unittest.TestCase):
 
         self.assertEqual(list(first_directory.glob("*.tmp")), [])
         self.assertEqual(list(second_directory.glob("*.tmp")), [])
+
+    def test_two_releases_share_content_identity_and_build_order_is_irrelevant(self):
+        future = copy.deepcopy(self.source)
+        future["base_url"] = (
+            "https://maps.discnxt.com/epochs/2031-04-05-v1/tiles/"
+        )
+        release = future["documents"]["release.json"]
+        release["attribution"] = "Discnxt future capture"
+        release["capture_date"] = "2031-04-05"
+        release["release_id"] = "2031-04-05-v1"
+        release_bytes = (
+            json.dumps(release, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        future["raw"]["release.json"] = release_bytes
+
+        assets = future["documents"]["release-assets.json"]
+        assets["release_id"] = release["release_id"]
+        content_asset = next(
+            asset for asset in assets["assets"]
+            if asset["path"].endswith(".b3dm")
+        )
+        content_asset["bytes"] += 1
+        content_asset["sha256"] = "f" * 64
+        release_asset = next(
+            asset for asset in assets["assets"]
+            if asset["path"] == "release.json"
+        )
+        release_asset["bytes"] = len(release_bytes)
+        release_asset["sha256"] = hashlib.sha256(release_bytes).hexdigest()
+        future["raw"]["release-assets.json"] = (
+            json.dumps(assets, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+
+        first = Path(self.temporary_directory.name) / "aggregate-first"
+        second = Path(self.temporary_directory.name) / "aggregate-second"
+        catalog.build_catalog(first, [self.source, future])
+        catalog.build_catalog(second, [future, self.source])
+
+        for filename in ("catalog.sqlite3", "catalog.json"):
+            self.assertEqual(
+                (first / filename).read_bytes(),
+                (second / filename).read_bytes(),
+            )
+
+        projection = json.loads(
+            (first / "catalog.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            [release["release_id"] for release in projection["releases"]],
+            ["2026-07-29-v1", "2031-04-05-v1"],
+        )
+        connection = sqlite3.connect(first / "catalog.sqlite3")
+        try:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM nodes WHERE kind = 'release'"
+                ).fetchone()[0],
+                2,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM nodes WHERE kind = 'content_asset'"
+                ).fetchone()[0],
+                5,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM edges WHERE relation = 'references'"
+                ).fetchone()[0],
+                8,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM nodes WHERE kind = 'license'"
+                ).fetchone()[0],
+                1,
+            )
+        finally:
+            connection.close()
+
+    def test_rejected_update_preserves_the_last_complete_catalog(self):
+        output = Path(self.temporary_directory.name) / "preserve-on-reject"
+        catalog.build_catalog(output, self.source)
+        before = {
+            name: (output / name).read_bytes()
+            for name in ("catalog.sqlite3", "catalog.json")
+        }
+        rejected = copy.deepcopy(self.source)
+        rejected["documents"]["release-assets.json"]["status"] = "rejected"
+
+        with self.assertRaisesRegex(ValueError, "is not accepted"):
+            catalog.build_catalog(output, [self.source, rejected])
+
+        self.assertEqual(
+            before,
+            {
+                name: (output / name).read_bytes()
+                for name in ("catalog.sqlite3", "catalog.json")
+            },
+        )
+        self.assertEqual(list(output.glob("*.tmp")), [])
 
 
 if __name__ == "__main__":
