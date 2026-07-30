@@ -93,6 +93,7 @@ test("viewer fails closed and exposes metric authority plus disclosures", async 
 
   assert.match(component, /GPS-scaled photogrammetry — not survey grade/);
   assert.match(component, /Cartesian3\.distance/);
+  assert.match(component, /drillPick\(movement\.position, 20\)/);
   assert.match(component, /pickPosition/);
   assert.match(component, /belongsToTileset/);
   assert.match(component, /requestPointerLock/);

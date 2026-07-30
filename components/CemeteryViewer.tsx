@@ -635,8 +635,8 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
     const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
     measurementHandlerRef.current = handler;
     handler.setInputAction((movement: any) => {
-      const picked = viewer.scene.pick(movement.position);
-      if (!belongsToTileset(picked, tileset)) {
+      const picked = viewer.scene.drillPick(movement.position, 20);
+      if (!picked.some((candidate: any) => belongsToTileset(candidate, tileset))) {
         setMeasurementHint(
           "That point is not on the approved metric tileset. Choose the visible mesh."
         );
