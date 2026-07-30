@@ -1,5 +1,4 @@
-# Versioned metric assets stay on the lab server; the viewer shell comes from
-# the existing public OpenAI Sites project.
+# Versioned metric assets and the viewer shell are served natively from the lab.
 maps.discnxt.com {
 	encode gzip zstd
 
@@ -25,9 +24,7 @@ maps.discnxt.com {
 	}
 
 	handle {
-		reverse_proxy https://saint-martins-3d-map.xananthium.chatgpt.site {
-			header_up Host saint-martins-3d-map.xananthium.chatgpt.site
-		}
+		reverse_proxy 127.0.0.1:4310
 	}
 
 	header {

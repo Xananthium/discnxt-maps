@@ -26,6 +26,10 @@
     "typescript": "6.0.3",
     "wrangler": "4.115.0"
   },
+  "overrides": {
+    "postcss": "8.5.25",
+    "sharp": "0.35.3"
+  },
   "engines": {
     "node": ">=20.9.0"
   },
