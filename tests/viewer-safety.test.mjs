@@ -86,12 +86,59 @@ test("viewer fails closed and exposes metric authority plus disclosures", async 
   assert.match(component, /Browser clipping is not a privacy/);
   assert.match(component, /FIXED_SCENE_TIME/);
   assert.match(component, /median stated GNSS accuracies of 0\.847 m/);
-  assert.match(component, /average GNSS-prior[\s\S]*6\.703 m/);
-  assert.match(page, /NEXT_PUBLIC_METRIC_TILESET_URL/);
-  assert.match(page, /NEXT_PUBLIC_PUBLIC_RELEASE_APPROVED/);
-  assert.match(page, /NEXT_PUBLIC_PRIVACY_CROP_VERIFIED/);
-  assert.match(environment, /NEXT_PUBLIC_METRIC_TILESET_URL=\s*\n/);
+  assert.match(component, /average[\s\S]*GNSS-prior[\s\S]*3\.125 m/);
+  assert.match(page, /NEXT_PUBLIC_MAP_EPOCHS_JSON/);
+  assert.doesNotMatch(page, /NEXT_PUBLIC_METRIC_TILESET_URL/);
+  assert.match(environment, /"id":"2026-07-29"/);
+  assert.match(environment, /"metricTilesetUrl":""/);
+  assert.match(environment, /"publicReleaseApproved":false/);
+  assert.match(environment, /"privacyCropVerified":false/);
   assert.equal("deploy" in packageJson.scripts, false);
+});
+
+test("timeline switches only the selected gated metric layer and carries URL state", async () => {
+  const component = await readFile(
+    join(viewerRoot, "components", "CemeteryViewer.tsx"),
+    "utf8"
+  );
+
+  assert.match(component, /aria-label="Map timeline"/);
+  assert.match(component, /aria-current=\{selected \? "date"/);
+  assert.match(component, /url\.searchParams\.set\("epoch", nextEpochId\)/);
+  assert.match(component, /selectedEpoch\.metricTilesetUrl/);
+  assert.match(
+    component,
+    /selectedEpoch\.publicReleaseApproved && selectedEpoch\.privacyCropVerified/
+  );
+  assert.match(component, /removeTileset\(viewer, previousTileset\)/);
+  assert.match(component, /data-map-epoch=\{selectedEpoch\.id\}/);
+});
+
+test("next-flight card exposes the measured Autel capture prescription", async () => {
+  const component = await readFile(
+    join(viewerRoot, "components", "CemeteryViewer.tsx"),
+    "utf8"
+  );
+
+  assert.match(component, /<details className="next-flight-panel panel">/);
+  assert.match(component, /Autel EVO II Pro Enterprise V3 RTK/);
+  assert.match(component, /ND filters[\s\S]*off by default/);
+  assert.match(component, /5472 × 3648/);
+  assert.match(component, /JPG[\s\S]*2 s cadence[\s\S]*DNG[\s\S]*5 s/);
+  assert.match(component, /1\/1000 s target/);
+  assert.match(component, /1\/800 s moving-flight/);
+  assert.match(component, /f\/4[\s\S]*f\/2\.8/);
+  assert.match(component, /ISO 100–800/);
+  assert.match(component, /RTK[\s\S]*FIX[\s\S]*base\/NTRIP/);
+  assert.match(
+    component,
+    /30 m AGL · −90° nadir \+ four −45° to −50° oblique[\s\S]*83\/80 overlap/
+  );
+  assert.match(component, /1\.5 m\/s · 2 s/);
+  assert.match(component, /10 m AGL · −25° · N\/S\/E\/W · ≤5 m line spacing/);
+  assert.match(component, /1 m\/s · 2 s/);
+  assert.match(component, /8–15 m stand-off · −10° to −25° · five azimuth offsets/);
+  assert.match(component, /1–2 m stations/);
 });
 
 test("camera bookmarks and Cesium runtime are deterministic and pinned", async () => {

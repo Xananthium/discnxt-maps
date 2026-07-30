@@ -8,16 +8,12 @@ import {
   useRef,
   useState
 } from "react";
+import type { PublicMapEpoch } from "../lib/mapEpochs.mjs";
 
 export interface ViewerConfig {
   boundaryUrl: string;
-  metricTilesetUrl: string;
   cesiumScriptUrl: string;
-  releaseId: string;
-  modelStatusLabel: string;
-  captureDate: string;
-  publicReleaseApproved: boolean;
-  privacyCropVerified: boolean;
+  epochs: readonly PublicMapEpoch[];
 }
 
 type AssetPhase =
@@ -165,7 +161,27 @@ function belongsToTileset(picked: any, tileset: any): boolean {
   );
 }
 
+function removeTileset(viewer: any, tileset: any): void {
+  if (!tileset) {
+    return;
+  }
+  if (viewer && !viewer.isDestroyed?.()) {
+    const removed = viewer.scene.primitives.remove(tileset);
+    if (removed) {
+      return;
+    }
+  }
+  if (!tileset.isDestroyed?.()) {
+    tileset.destroy?.();
+  }
+}
+
 export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
+  const defaultEpoch = config.epochs.at(-1);
+  if (!defaultEpoch) {
+    throw new Error("At least one fail-closed map epoch is required.");
+  }
+
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<any>(null);
   const tilesetRef = useRef<any>(null);
@@ -180,11 +196,13 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
   const [engineStatus, setEngineStatus] = useState<AssetPhase>("loading");
   const [boundaryStatus, setBoundaryStatus] = useState<AssetPhase>("idle");
   const [modelStatus, setModelStatus] = useState<AssetPhase>("idle");
-  const [modelDetail, setModelDetail] = useState(config.modelStatusLabel);
+  const [modelDetail, setModelDetail] = useState(defaultEpoch.modelStatusLabel);
   const [runtimeError, setRuntimeError] = useState("");
   const [reloadToken, setReloadToken] = useState(0);
   const [bookmark, setBookmark] = useState<BookmarkId>("overview");
   const [quality, setQuality] = useState<QualityId>("balanced");
+  const [selectedEpochId, setSelectedEpochId] = useState(defaultEpoch.id);
+  const [urlStateResolved, setUrlStateResolved] = useState(false);
   const [flyActive, setFlyActive] = useState(false);
   const [measurementEnabled, setMeasurementEnabled] = useState(false);
   const [measurementHint, setMeasurementHint] = useState(
@@ -193,31 +211,42 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
   const [measurement, setMeasurement] = useState<MeasurementResult | null>(null);
   const [cameraReadout, setCameraReadout] = useState<CameraReadout | null>(null);
 
+  const selectedEpoch = useMemo(
+    () =>
+      config.epochs.find((epoch) => epoch.id === selectedEpochId) ??
+      defaultEpoch,
+    [config.epochs, defaultEpoch, selectedEpochId]
+  );
   const releaseGateOpen =
-    config.publicReleaseApproved && config.privacyCropVerified;
-  const metricConfigured = config.metricTilesetUrl.length > 0;
+    selectedEpoch.publicReleaseApproved && selectedEpoch.privacyCropVerified;
+  const metricConfigured = selectedEpoch.metricTilesetUrl.length > 0;
   const metricPermitted = metricConfigured && releaseGateOpen;
   const shellReady = boundaryStatus === "ready" && engineStatus === "ready";
   const metricReady = modelStatus === "ready";
 
   const releaseGateMessage = useMemo(() => {
     if (!metricConfigured) {
-      return "No public metric tileset is configured. Boundary-only preview is active.";
+      return `${selectedEpoch.modelStatusLabel} No public metric tileset is configured for this epoch; boundary-only preview is active.`;
     }
-    if (!config.publicReleaseApproved && !config.privacyCropVerified) {
-      return "Metric loading is blocked: release approval and privacy-crop verification are both absent.";
+    if (
+      !selectedEpoch.publicReleaseApproved &&
+      !selectedEpoch.privacyCropVerified
+    ) {
+      return `Epoch ${selectedEpoch.id} is blocked: release approval and privacy-crop verification are both absent.`;
     }
-    if (!config.publicReleaseApproved) {
-      return "Metric loading is blocked: public release approval is absent.";
+    if (!selectedEpoch.publicReleaseApproved) {
+      return `Epoch ${selectedEpoch.id} is blocked: public release approval is absent.`;
     }
-    if (!config.privacyCropVerified) {
-      return "Metric loading is blocked: privacy-crop verification is absent.";
+    if (!selectedEpoch.privacyCropVerified) {
+      return `Epoch ${selectedEpoch.id} is blocked: privacy-crop verification is absent.`;
     }
-    return "Release and privacy gates are open for the configured metric asset.";
+    return `Release and privacy gates are open for epoch ${selectedEpoch.id}.`;
   }, [
-    config.privacyCropVerified,
-    config.publicReleaseApproved,
-    metricConfigured
+    metricConfigured,
+    selectedEpoch.id,
+    selectedEpoch.modelStatusLabel,
+    selectedEpoch.privacyCropVerified,
+    selectedEpoch.publicReleaseApproved
   ]);
 
   const clearMeasurementEntities = useCallback(() => {
@@ -235,14 +264,43 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
   }, []);
 
   const updateUrlState = useCallback(
-    (nextBookmark: BookmarkId, nextQuality: QualityId) => {
+    (
+      nextBookmark: BookmarkId,
+      nextQuality: QualityId,
+      nextEpochId: string
+    ) => {
       const url = new URL(window.location.href);
       url.searchParams.set("bookmark", nextBookmark);
       url.searchParams.set("quality", nextQuality);
+      url.searchParams.set("epoch", nextEpochId);
       window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
     },
     []
   );
+
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const queryBookmark = query.get("bookmark");
+    const queryQuality = query.get("quality");
+    const queryEpoch = query.get("epoch");
+    const initialBookmark: BookmarkId = isBookmark(queryBookmark)
+      ? queryBookmark
+      : "overview";
+    const initialQuality: QualityId = isQuality(queryQuality)
+      ? queryQuality
+      : "balanced";
+    const initialEpoch = config.epochs.some((epoch) => epoch.id === queryEpoch)
+      ? (queryEpoch as string)
+      : defaultEpoch.id;
+
+    currentBookmarkRef.current = initialBookmark;
+    currentQualityRef.current = initialQuality;
+    setBookmark(initialBookmark);
+    setQuality(initialQuality);
+    setSelectedEpochId(initialEpoch);
+    updateUrlState(initialBookmark, initialQuality, initialEpoch);
+    setUrlStateResolved(true);
+  }, [config.epochs, defaultEpoch.id, updateUrlState]);
 
   const applyQuality = useCallback((nextQuality: QualityId) => {
     const viewer = viewerRef.current;
@@ -311,14 +369,11 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
     setMeasurementHint(
       "Load an approved metric tileset to enable distance measurement."
     );
-    setModelStatus(
-      !metricConfigured ? "unavailable" : metricPermitted ? "loading" : "blocked"
-    );
-    setModelDetail(releaseGateMessage);
+    setModelStatus("idle");
+    setModelDetail("Waiting for the selected map epoch.");
 
     let disposed = false;
     let removeCameraListener: (() => void) | undefined;
-    let removeTileVisibleListener: (() => void) | undefined;
 
     try {
       const viewer = new Cesium.Viewer(container, {
@@ -347,20 +402,9 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
       viewer.clock.currentTime = Cesium.JulianDate.fromIso8601(FIXED_SCENE_TIME);
       viewer.clock.shouldAnimate = false;
 
-      const query = new URLSearchParams(window.location.search);
-      const queryBookmark = query.get("bookmark");
-      const queryQuality = query.get("quality");
-      const initialBookmark: BookmarkId = isBookmark(queryBookmark)
-        ? queryBookmark
-        : "overview";
-      const initialQuality: QualityId = isQuality(queryQuality)
-        ? queryQuality
-        : "balanced";
-      currentBookmarkRef.current = initialBookmark;
-      currentQualityRef.current = initialQuality;
-      setBookmark(initialBookmark);
+      const initialBookmark = currentBookmarkRef.current;
+      const initialQuality = currentQualityRef.current;
       applyQuality(initialQuality);
-      updateUrlState(initialBookmark, initialQuality);
 
       const updateCameraReadout = () => {
         if (!viewer.isDestroyed?.()) {
@@ -409,55 +453,7 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
         }
       })();
 
-      const metricTask = (async () => {
-        if (!metricPermitted) {
-          return;
-        }
-        try {
-          const tileset = await Cesium.Cesium3DTileset.fromUrl(
-            config.metricTilesetUrl,
-            {
-              maximumScreenSpaceError:
-                QUALITY_SETTINGS[initialQuality].maximumScreenSpaceError
-            }
-          );
-          if (disposed || viewer.isDestroyed?.()) {
-            tileset.destroy?.();
-            return;
-          }
-          tilesetRef.current = tileset;
-          viewer.scene.primitives.add(tileset);
-          setModelStatus("streaming");
-          setModelDetail(
-            "Tileset metadata loaded; waiting for the first visible metric tile."
-          );
-          removeTileVisibleListener = tileset.tileVisible.addEventListener(() => {
-            if (!disposed) {
-              setModelStatus("ready");
-              setModelDetail(
-                "First visible metric tile loaded. Mesh-surface distance measurement is enabled."
-              );
-              setMeasurementHint(
-                "Select Measure distance, then click two points on the metric mesh."
-              );
-              removeTileVisibleListener?.();
-              removeTileVisibleListener = undefined;
-            }
-          });
-        } catch (error) {
-          if (!disposed) {
-            setModelStatus("error");
-            setModelDetail("The configured metric tileset could not be loaded.");
-            setRuntimeError(
-              `Metric tileset failed to load: ${
-                error instanceof Error ? error.message : String(error)
-              }`
-            );
-          }
-        }
-      })();
-
-      await Promise.allSettled([boundaryTask, metricTask]);
+      await Promise.allSettled([boundaryTask]);
       if (!disposed && !viewer.isDestroyed?.()) {
         applyBookmark(initialBookmark);
       }
@@ -475,18 +471,12 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
     return () => {
       disposed = true;
       removeCameraListener?.();
-      removeTileVisibleListener?.();
     };
   }, [
     applyBookmark,
     applyQuality,
     config.boundaryUrl,
-    config.metricTilesetUrl,
-    destroyViewer,
-    metricConfigured,
-    metricPermitted,
-    releaseGateMessage,
-    updateUrlState
+    destroyViewer
   ]);
 
   useEffect(() => {
@@ -509,6 +499,117 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
       destroyViewer();
     };
   }, [destroyViewer, engineStatus, initializeViewer, reloadToken]);
+
+  useEffect(() => {
+    if (
+      !urlStateResolved ||
+      engineStatus !== "ready" ||
+      boundaryStatus !== "ready"
+    ) {
+      return;
+    }
+
+    const viewer = viewerRef.current;
+    const Cesium = window.Cesium;
+    if (!viewer || !Cesium || viewer.isDestroyed?.()) {
+      return;
+    }
+
+    let disposed = false;
+    let loadedTileset: any = null;
+    let removeTileVisibleListener: (() => void) | undefined;
+
+    measurementHandlerRef.current?.destroy?.();
+    measurementHandlerRef.current = null;
+    clearMeasurementEntities();
+    setMeasurementEnabled(false);
+    setMeasurement(null);
+    setMeasurementHint(
+      "Load an approved metric tileset to enable distance measurement."
+    );
+    setRuntimeError("");
+
+    const previousTileset = tilesetRef.current;
+    tilesetRef.current = null;
+    removeTileset(viewer, previousTileset);
+
+    setModelStatus(
+      !metricConfigured ? "unavailable" : metricPermitted ? "loading" : "blocked"
+    );
+    setModelDetail(releaseGateMessage);
+
+    if (metricPermitted) {
+      void (async () => {
+        try {
+          const tileset = await Cesium.Cesium3DTileset.fromUrl(
+            selectedEpoch.metricTilesetUrl,
+            {
+              maximumScreenSpaceError:
+                QUALITY_SETTINGS[currentQualityRef.current]
+                  .maximumScreenSpaceError
+            }
+          );
+          if (disposed || viewer.isDestroyed?.()) {
+            tileset.destroy?.();
+            return;
+          }
+
+          loadedTileset = tileset;
+          tilesetRef.current = tileset;
+          viewer.scene.primitives.add(tileset);
+          setModelStatus("streaming");
+          setModelDetail(
+            `Epoch ${selectedEpoch.id} metadata loaded; waiting for its first visible metric tile.`
+          );
+          removeTileVisibleListener = tileset.tileVisible.addEventListener(() => {
+            if (!disposed && tilesetRef.current === tileset) {
+              setModelStatus("ready");
+              setModelDetail(
+                `Epoch ${selectedEpoch.id} is visible. Mesh-surface distance measurement is enabled for this epoch.`
+              );
+              setMeasurementHint(
+                "Select Measure distance, then click two points on the metric mesh."
+              );
+              removeTileVisibleListener?.();
+              removeTileVisibleListener = undefined;
+            }
+          });
+        } catch (error) {
+          if (!disposed) {
+            setModelStatus("error");
+            setModelDetail(
+              `Epoch ${selectedEpoch.id} metric tileset could not be loaded.`
+            );
+            setRuntimeError(
+              `Metric tileset for epoch ${selectedEpoch.id} failed to load: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+          }
+        }
+      })();
+    }
+
+    return () => {
+      disposed = true;
+      removeTileVisibleListener?.();
+      if (tilesetRef.current === loadedTileset) {
+        tilesetRef.current = null;
+      }
+      removeTileset(viewer, loadedTileset);
+    };
+  }, [
+    boundaryStatus,
+    clearMeasurementEntities,
+    engineStatus,
+    metricConfigured,
+    metricPermitted,
+    releaseGateMessage,
+    reloadToken,
+    selectedEpoch.id,
+    selectedEpoch.metricTilesetUrl,
+    urlStateResolved
+  ]);
 
   useEffect(() => {
     measurementHandlerRef.current?.destroy?.();
@@ -701,12 +802,24 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
 
   const selectBookmark = (nextBookmark: BookmarkId) => {
     applyBookmark(nextBookmark);
-    updateUrlState(nextBookmark, currentQualityRef.current);
+    updateUrlState(nextBookmark, currentQualityRef.current, selectedEpoch.id);
   };
 
   const selectQuality = (nextQuality: QualityId) => {
     applyQuality(nextQuality);
-    updateUrlState(currentBookmarkRef.current, nextQuality);
+    updateUrlState(currentBookmarkRef.current, nextQuality, selectedEpoch.id);
+  };
+
+  const selectEpoch = (nextEpochId: string) => {
+    if (!config.epochs.some((epoch) => epoch.id === nextEpochId)) {
+      return;
+    }
+    setSelectedEpochId(nextEpochId);
+    updateUrlState(
+      currentBookmarkRef.current,
+      currentQualityRef.current,
+      nextEpochId
+    );
   };
 
   const enterFlyMode = async () => {
@@ -745,6 +858,7 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
       className="viewer-shell"
       data-testid={metricReady ? "viewer-ready" : undefined}
       data-shell-ready={shellReady ? "true" : "false"}
+      data-map-epoch={selectedEpoch.id}
     >
       <Script
         src={config.cesiumScriptUrl}
@@ -781,6 +895,48 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
         </div>
       </header>
 
+      <nav className="timeline-panel panel" aria-label="Map timeline">
+        <div className="timeline-heading">
+          <span>
+            <span className="eyebrow">Temporal record</span>
+            <strong>Map epoch</strong>
+          </span>
+          <span className="timeline-count">{config.epochs.length}</span>
+        </div>
+        <ol className="epoch-list">
+          {config.epochs.map((epoch) => {
+            const epochGateOpen =
+              epoch.publicReleaseApproved && epoch.privacyCropVerified;
+            const selected = epoch.id === selectedEpoch.id;
+            return (
+              <li key={epoch.id}>
+                <button
+                  type="button"
+                  className={selected ? "active" : ""}
+                  aria-current={selected ? "date" : undefined}
+                  aria-pressed={selected}
+                  aria-label={`${epoch.captureDate}, ${epoch.label}, ${
+                    epochGateOpen ? "published" : "held"
+                  }`}
+                  data-testid={`epoch-${epoch.id}`}
+                  onClick={() => selectEpoch(epoch.id)}
+                >
+                  <time dateTime={epoch.captureDate}>{epoch.captureDate}</time>
+                  <span>{epoch.label}</span>
+                  <small className={epochGateOpen ? "pass" : "hold"}>
+                    {epochGateOpen ? "Published" : "Held"}
+                  </small>
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+        <p className="sr-only" aria-live="polite">
+          Selected map epoch {selectedEpoch.captureDate}, {selectedEpoch.label}.
+          Metric release {releaseGateOpen ? "permitted" : "held"}.
+        </p>
+      </nav>
+
       <aside className="status-panel panel" aria-label="Model and release status">
         <div className="panel-heading">
           <div>
@@ -805,21 +961,21 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
           </div>
           <div>
             <dt>Release ID</dt>
-            <dd className="mono">{config.releaseId}</dd>
+            <dd className="mono">{selectedEpoch.releaseId}</dd>
           </div>
           <div>
             <dt>Capture</dt>
-            <dd>{config.captureDate}</dd>
+            <dd>{selectedEpoch.captureDate}</dd>
           </div>
         </dl>
 
         <p className="status-detail">{modelDetail}</p>
         <div className="gate-row">
-          <span className={config.publicReleaseApproved ? "pass" : "hold"}>
-            Release {config.publicReleaseApproved ? "approved" : "held"}
+          <span className={selectedEpoch.publicReleaseApproved ? "pass" : "hold"}>
+            Release {selectedEpoch.publicReleaseApproved ? "approved" : "held"}
           </span>
-          <span className={config.privacyCropVerified ? "pass" : "hold"}>
-            Crop {config.privacyCropVerified ? "verified" : "unverified"}
+          <span className={selectedEpoch.privacyCropVerified ? "pass" : "hold"}>
+            Crop {selectedEpoch.privacyCropVerified ? "verified" : "unverified"}
           </span>
         </div>
       </aside>
@@ -918,6 +1074,103 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
         </div>
       </section>
 
+      <details className="next-flight-panel panel">
+        <summary>
+          <span className="next-flight-title">
+            <span className="eyebrow">Measured capture prescription</span>
+            <strong>Next flight</strong>
+          </span>
+          <span className="next-flight-summary">
+            Autel EVO II Pro Enterprise V3 RTK
+          </span>
+        </summary>
+        <div className="next-flight-body">
+          <section aria-labelledby="camera-lock-heading">
+            <h3 id="camera-lock-heading">Camera lock</h3>
+            <ul className="flight-checks">
+              <li>
+                ND filters <strong>off by default</strong>; no digital zoom, HDR,
+                or AEB.
+              </li>
+              <li>
+                Full <strong>5472 × 3648</strong>, 3:2, wide camera.
+                Use JPG for the 2 s cadence; DNG needs at least 5 s or a
+                settled capture.
+              </li>
+              <li>
+                Manual <strong>1/1000 s target</strong>; 1/800 s moving-flight
+                floor.
+              </li>
+              <li>
+                Prefer f/4; open to f/2.8 before allowing a slower shutter.
+              </li>
+              <li>ISO 100–800; lock white balance and focus.</li>
+            </ul>
+          </section>
+
+          <section aria-labelledby="control-heading">
+            <h3 id="control-heading">Metric control</h3>
+            <p>
+              Require RTK <strong>FIX</strong> before production routes. Preserve
+              raw satellite observations and flight logs; record the
+              base/NTRIP correction source, datum, and firmware; measure
+              independent checkpoints.
+            </p>
+          </section>
+
+          <section aria-labelledby="mission-heading">
+            <h3 id="mission-heading">Passes</h3>
+            <div className="flight-table-wrap">
+              <table className="flight-table">
+                <caption className="sr-only">
+                  Planned heights, gimbal angles, overlap, speed, and view
+                  diversity
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Pass</th>
+                    <th scope="col">Geometry</th>
+                    <th scope="col">Cadence</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row">Global block</th>
+                    <td>
+                      30 m AGL · −90° nadir + four −45° to −50° oblique
+                      headings · 83/80 overlap
+                    </td>
+                    <td>1.5 m/s · 2 s</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Upright detail</th>
+                    <td>
+                      10 m AGL · −25° · N/S/E/W · ≤5 m line spacing
+                    </td>
+                    <td>1 m/s · 2 s</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Facades</th>
+                    <td>
+                      8–15 m stand-off · −10° to −25° · five azimuth offsets
+                    </td>
+                    <td>1–2 m stations · ≤0.5 m/s or settled hover</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p className="azimuth-note">
+              Facade azimuth offsets: −60°, −30°, 0°, +30°, +60°.
+            </p>
+          </section>
+
+          <p className="flight-safety-note">
+            Execute only with site authorization and a walked obstacle check;
+            increase altitude for actual obstacles.
+          </p>
+        </div>
+      </details>
+
       <aside className="disclosure-panel panel" aria-label="Accuracy and privacy">
         <p className="eyebrow">Read before use</p>
         <h2>Accuracy &amp; privacy</h2>
@@ -931,8 +1184,9 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
           demonstrated reconstruction accuracy.
         </p>
         <p>
-          The incremental reconstruction&apos;s measured average GNSS-prior
-          residual was 6.703 m. It also does not establish survey accuracy.
+          The selected triangulation reconstruction&apos;s measured average
+          GNSS-prior residual was 3.125 m. It also does not establish survey
+          accuracy.
         </p>
         <p>
           Public mesh loading is fail-closed until a physical privacy crop and
