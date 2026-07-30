@@ -635,22 +635,18 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
     const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
     measurementHandlerRef.current = handler;
     handler.setInputAction((movement: any) => {
-      const picked = viewer.scene.drillPick(movement.position, 20);
-      if (!picked.some((candidate: any) => belongsToTileset(candidate, tileset))) {
+      const ray = viewer.camera.getPickRay(movement.position);
+      const picked = ray ? viewer.scene.drillPickFromRay(ray, 20) : [];
+      const metricHit = picked.find((candidate: any) =>
+        belongsToTileset(candidate.object, tileset)
+      );
+      if (!metricHit || !Cesium.defined(metricHit.position)) {
         setMeasurementHint(
           "That point is not on the approved metric tileset. Choose the visible mesh."
         );
         return;
       }
-      if (!viewer.scene.pickPositionSupported) {
-        setMeasurementHint("This browser does not support depth-position picking.");
-        return;
-      }
-      const point = viewer.scene.pickPosition(movement.position);
-      if (!Cesium.defined(point)) {
-        setMeasurementHint("No metric surface position was resolved. Try again.");
-        return;
-      }
+      const point = metricHit.position;
 
       measurementPointsRef.current.push(point);
       const index = measurementPointsRef.current.length;
