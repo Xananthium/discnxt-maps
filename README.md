@@ -83,18 +83,18 @@ partially accepts an epoch list.
 - Camera coordinates are navigation readouts. They do not establish model or
   survey accuracy.
 - Expand **Next flight** for the measured Autel EVO II Pro Enterprise V3 RTK
-  capture prescription. It keeps ND filters off by default; fixes full
-  5472 × 3648 3:2 capture, manual 1/1000 s target/1/800 s moving floor,
-  f/4-to-f/2.8 and ISO 100–800 limits, fixed white balance/focus, RTK FIX,
-  raw-observation retention, checkpoints, JPG/DNG cadence limits, and the
-  global/detail/facade passes.
+  field card. The durable authority is the
+  [next-flight and Unreal SOP](../docs/next_flight_unreal_sop.md): global
+  altitude is verified canopy height plus positive terrain rise plus a 15 m
+  margin (45 m / 148 ft for a verified 30 m canopy on level terrain), with
+  10.8 km/h nadir, 9.0 km/h oblique, fixed exposure/focus, RTK FIX,
+  cross-grid, battery-bridge, and manually cleared facade rules.
 
-Always retain the visible warning: **GPS-scaled photogrammetry — not survey
-grade**. Camera metadata's median stated GNSS accuracies (0.847 m horizontal,
-2.597 m vertical) are not demonstrated reconstruction accuracy. Keep those
-metadata values distinct from the selected triangulation reconstruction's
-measured average GNSS-prior residual of 3.125 m; that residual also does not
-establish survey accuracy.
+Keep the viewport to a compact **LAB** state and required attribution. Accuracy,
+RTK state, epoch transform, and vertical-datum details belong in point/epoch
+inspection metadata, not a permanent text wall over the model. Camera
+metadata's stated GNSS values and the reconstruction's GNSS-prior residual are
+inputs, not independent checkpoint results.
 
 ## Asset and license contract
 
@@ -113,6 +113,22 @@ Compiled/runtime notices are published at
 `/third-party-notices.txt`. Every released metric epoch carries its own visible
 model attribution and content license; the viewer's MIT license does not apply
 to model data automatically.
+
+## Unreal handoff
+
+Cesium for Unreal can stream the accepted public epoch directly by adding a
+blank `Cesium3DTileset`, selecting **Source: From URL**, and entering:
+
+```text
+https://maps.discnxt.com/epochs/2026-07-29-v1/tiles/tileset.json
+```
+
+The [next-flight and Unreal SOP](../docs/next_flight_unreal_sop.md) includes the
+direct resumable downloads, offline directory layout, CC BY 4.0 attribution,
+coordinate/elevation limits, and immutable future-RTK epoch workflow. The
+current accepted handoff is Cesium 3D Tiles/B3DM; do not introduce a second
+browser renderer or claim a standalone GLB until such an export passes the same
+geometry, texture, license, and coordinate-round-trip gates.
 
 ## Verification and local OpenNext packaging
 

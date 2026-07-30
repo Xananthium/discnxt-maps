@@ -1,0 +1,143 @@
+{
+  "assets": [
+    {
+      "bytes": 35370176,
+      "path": "LOD-0/Mesh-XL-YL.b3dm",
+      "sha256": "b193e49786c2573fe9c52f1ff68256ad72c196f5ded3dbf053ea300a6a0428e0",
+      "url": "https://maps.discnxt.com/epochs/2026-07-29-v1/tiles/LOD-0/Mesh-XL-YL.b3dm"
+    },
+    {
+      "bytes": 53115856,
+      "path": "LOD-0/Mesh-XL-YR.b3dm",
+      "sha256": "99f5c5409e54305d467b6bd7303c0881b137cdfa0bb0f75c80a4a35b39cffc53",
+      "url": "https://maps.discnxt.com/epochs/2026-07-29-v1/tiles/LOD-0/Mesh-XL-YR.b3dm"
+    },
+    {
+      "bytes": 39411296,
+      "path": "LOD-0/Mesh-XR-YL.b3dm",
+      "sha256": "804b0bd3f801c04c11d5bc960bb91e59a9519c4258a8077e7f21df918069f936",
+      "url": "https://maps.discnxt.com/epochs/2026-07-29-v1/tiles/LOD-0/Mesh-XR-YL.b3dm"
+    },
+    {
+      "bytes": 47467752,
+      "path": "LOD-0/Mesh-XR-YR.b3dm",
+      "sha256": "0ca716fc8907651faf7e8bd1944bf0d13864a4125ccb945c23b25bcb674771c5",
+      "url": "https://maps.discnxt.com/epochs/2026-07-29-v1/tiles/LOD-0/Mesh-XR-YR.b3dm"
+    }
+  ],
+  "attribution": "Discnxt",
+  "capture_date": "2026-07-29",
+  "content_bytes": 175365080,
+  "epoch_id": "epoch:2026-07-29",
+  "license": {
+    "name": "CC BY 4.0",
+    "url": "https://creativecommons.org/licenses/by/4.0/"
+  },
+  "release_id": "2026-07-29-v1",
+  "schema_version": 1,
+  "source_manifest_sha256": "8f8e49e012801aabaf3181a5359ea5c694a830e49061060cd40fc3bf352c0c8e",
+  "spatial": {
+    "ecef_to_enu_column_major": [
+      0.9849238911105109,
+      -0.11222773638067829,
+      0.13164294096760173,
+      0.0,
+      0.17298823289383153,
+      0.6389785996277659,
+      -0.7495207939063524,
+      0.0,
+      0.0,
+      0.7609936165334162,
+      0.6487593664798927,
+      0.0,
+      -0.0,
+      21109.67533473199,
+      -6369145.177385786,
+      1.0
+    ],
+    "enu_to_ecef_column_major": [
+      0.9849238911105109,
+      0.17298823289383153,
+      0.0,
+      0.0,
+      -0.11222773638067829,
+      0.6389785996277659,
+      0.7609936165334162,
+      0.0,
+      0.13164294096760173,
+      -0.7495207939063524,
+      0.6487593664798927,
+      0.0,
+      840822.0936792302,
+      -4787295.380642993,
+      4115978.2621224425,
+      1.0
+    ],
+    "epoch_id": "epoch:2026-07-29",
+    "geodetic_crs": "EPSG:4979",
+    "ground_relationship": "tileset root origin; no surveyed ground relation is established",
+    "origin_ecef_metres": [
+      840822.0936792302,
+      -4787295.380642993,
+      4115978.2621224425
+    ],
+    "origin_wgs84": {
+      "ellipsoid_height_metres": -1.897849142551422e-05,
+      "latitude_degrees": 40.44812860313985,
+      "longitude_degrees": -80.03839309675331
+    },
+    "provenance": "tileset.json root.transform[12:15]",
+    "site_frame": "frame:site-enu:2026-07-29-v1",
+    "tileset_root_transform_column_major": [
+      0.9849238911105109,
+      0.17298823289383153,
+      0.0,
+      0.0,
+      -0.13164294096681525,
+      0.7495207939018745,
+      -0.6487593664852257,
+      0.0,
+      -0.11222773638160083,
+      0.6389785996330185,
+      0.7609936165288699,
+      0.0,
+      840822.0936792302,
+      -4787295.380642993,
+      4115978.2621224425,
+      1.0
+    ],
+    "uncertainty": {
+      "horizontal_metres": null,
+      "vertical_metres": null
+    },
+    "world_crs": "EPSG:4978"
+  },
+  "tileset_url": "https://maps.discnxt.com/epochs/2026-07-29-v1/tiles/tileset.json",
+  "validators": [
+    {
+      "result": "passed",
+      "tool": "validate_b3dm_geometry",
+      "version": "1.0.1"
+    },
+    {
+      "result": "passed",
+      "tool": "validate_b3dm_release",
+      "version": "1.0.0"
+    },
+    {
+      "result": "passed",
+      "tool": "validate_cesium_report",
+      "version": "1.0.1"
+    },
+    {
+      "result": "passed",
+      "tool": "validate_embedded_ktx",
+      "version": "1.0.0"
+    },
+    {
+      "result": "passed",
+      "tool": "validate_tileset_georeference",
+      "version": "1.0.0"
+    }
+  ]
+}

@@ -26,6 +26,7 @@ type AssetPhase =
   | "error";
 type BookmarkId = "overview" | "north-oblique" | "south-oblique" | "east-edge";
 type QualityId = "lite" | "balanced" | "ultra";
+type NavigationMode = "walk" | "fly";
 
 interface CameraPreset {
   id: BookmarkId;
@@ -35,6 +36,7 @@ interface CameraPreset {
   height: number;
   heading: number;
   pitch: number;
+  range: number;
 }
 
 interface CameraReadout {
@@ -56,38 +58,42 @@ const CAMERA_PRESETS: readonly CameraPreset[] = [
   {
     id: "overview",
     label: "Overview",
-    longitude: -80.0383468799,
-    latitude: 40.4480824487,
-    height: 520,
+    longitude: -80.0383930968,
+    latitude: 40.4481286031,
+    height: 298,
     heading: 0,
-    pitch: -90
+    pitch: -90,
+    range: 240
   },
   {
     id: "north-oblique",
     label: "North oblique",
-    longitude: -80.03835,
-    latitude: 40.4501,
-    height: 430,
-    heading: 180,
-    pitch: -31
+    longitude: -80.0383930968,
+    latitude: 40.4481286031,
+    height: 298,
+    heading: 0,
+    pitch: -18,
+    range: 180
   },
   {
     id: "south-oblique",
     label: "South oblique",
-    longitude: -80.03835,
-    latitude: 40.44615,
-    height: 430,
-    heading: 0,
-    pitch: -31
+    longitude: -80.0383930968,
+    latitude: 40.4481286031,
+    height: 298,
+    heading: 180,
+    pitch: -18,
+    range: 180
   },
   {
     id: "east-edge",
     label: "East edge",
-    longitude: -80.03555,
-    latitude: 40.44805,
-    height: 420,
-    heading: 270,
-    pitch: -27
+    longitude: -80.0383930968,
+    latitude: 40.4481286031,
+    height: 298,
+    heading: 90,
+    pitch: -18,
+    range: 180
   }
 ] as const;
 
@@ -114,6 +120,8 @@ const QUALITY_SETTINGS: Record<
 
 const FIXED_SCENE_TIME = "2026-07-29T18:00:00Z";
 const MEASUREMENT_ENTITY_PREFIX = "metric-measurement-";
+const SELECTION_ENTITY_ID = "metric-coordinate-selection";
+const WALK_EYE_HEIGHT_M = 1.7;
 
 function isBookmark(value: string | null): value is BookmarkId {
   return CAMERA_PRESETS.some((preset) => preset.id === value);
@@ -161,6 +169,22 @@ function belongsToTileset(picked: any, tileset: any): boolean {
   );
 }
 
+function pickMetricPosition(
+  viewer: any,
+  Cesium: any,
+  tileset: any,
+  windowPosition: any
+): any | null {
+  const ray = viewer.camera.getPickRay(windowPosition);
+  const picked = ray ? viewer.scene.drillPickFromRay(ray, 20) : [];
+  const metricHit = picked.find((candidate: any) =>
+    belongsToTileset(candidate.object, tileset)
+  );
+  return metricHit && Cesium.defined(metricHit.position)
+    ? metricHit.position
+    : null;
+}
+
 function removeTileset(viewer: any, tileset: any): void {
   if (!tileset) {
     return;
@@ -186,11 +210,16 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
   const viewerRef = useRef<any>(null);
   const tilesetRef = useRef<any>(null);
   const measurementHandlerRef = useRef<any>(null);
+  const selectionHandlerRef = useRef<any>(null);
   const measurementPointsRef = useRef<any[]>([]);
+  const selectedPointRef = useRef<any>(null);
   const flyKeysRef = useRef<Set<string>>(new Set());
   const flyFrameRef = useRef<number | null>(null);
   const flyActiveRef = useRef(false);
-  const currentBookmarkRef = useRef<BookmarkId>("overview");
+  const walkLandingRef = useRef(false);
+  const navigationModeRef = useRef<NavigationMode>("walk");
+  const orbitHeadingRef = useRef(0);
+  const currentBookmarkRef = useRef<BookmarkId>("north-oblique");
   const currentQualityRef = useRef<QualityId>("balanced");
 
   const [engineStatus, setEngineStatus] = useState<AssetPhase>("loading");
@@ -199,11 +228,18 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
   const [modelDetail, setModelDetail] = useState(defaultEpoch.modelStatusLabel);
   const [runtimeError, setRuntimeError] = useState("");
   const [reloadToken, setReloadToken] = useState(0);
-  const [bookmark, setBookmark] = useState<BookmarkId>("overview");
+  const [bookmark, setBookmark] = useState<BookmarkId>("north-oblique");
   const [quality, setQuality] = useState<QualityId>("balanced");
   const [selectedEpochId, setSelectedEpochId] = useState(defaultEpoch.id);
   const [urlStateResolved, setUrlStateResolved] = useState(false);
   const [flyActive, setFlyActive] = useState(false);
+  const [navigationMode, setNavigationMode] =
+    useState<NavigationMode>("walk");
+  const [pickEnabled, setPickEnabled] = useState(false);
+  const [selectionHint, setSelectionHint] = useState(
+    "Pick a mesh point for coordinates, local orbit, or ground entry."
+  );
+  const [selectedPoint, setSelectedPoint] = useState<CameraReadout | null>(null);
   const [measurementEnabled, setMeasurementEnabled] = useState(false);
   const [measurementHint, setMeasurementHint] = useState(
     "Load an approved metric tileset to enable distance measurement."
@@ -263,6 +299,19 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
     measurementPointsRef.current = [];
   }, []);
 
+  const clearSelection = useCallback(() => {
+    const viewer = viewerRef.current;
+    if (viewer && !viewer.isDestroyed?.()) {
+      viewer.entities.removeById(SELECTION_ENTITY_ID);
+    }
+    selectedPointRef.current = null;
+    setSelectedPoint(null);
+    setPickEnabled(false);
+    setSelectionHint(
+      "Pick a mesh point for coordinates, local orbit, or ground entry."
+    );
+  }, []);
+
   const updateUrlState = useCallback(
     (
       nextBookmark: BookmarkId,
@@ -285,7 +334,7 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
     const queryEpoch = query.get("epoch");
     const initialBookmark: BookmarkId = isBookmark(queryBookmark)
       ? queryBookmark
-      : "overview";
+      : "north-oblique";
     const initialQuality: QualityId = isQuality(queryQuality)
       ? queryQuality
       : "balanced";
@@ -325,26 +374,33 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
     }
     currentBookmarkRef.current = nextBookmark;
     setBookmark(nextBookmark);
-    viewer.camera.setView({
-      destination: Cesium.Cartesian3.fromDegrees(
+    const target =
+      tilesetRef.current?.boundingSphere?.center ??
+      Cesium.Cartesian3.fromDegrees(
         preset.longitude,
         preset.latitude,
         preset.height
-      ),
-      orientation: {
-        heading: Cesium.Math.toRadians(preset.heading),
-        pitch: Cesium.Math.toRadians(preset.pitch),
-        roll: 0
-      }
-    });
+      );
+    viewer.camera.lookAt(
+      target,
+      new Cesium.HeadingPitchRange(
+        Cesium.Math.toRadians(preset.heading),
+        Cesium.Math.toRadians(preset.pitch),
+        preset.range
+      )
+    );
+    viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
     viewer.scene.requestRender?.();
   }, []);
 
   const destroyViewer = useCallback(() => {
     measurementHandlerRef.current?.destroy?.();
     measurementHandlerRef.current = null;
+    selectionHandlerRef.current?.destroy?.();
+    selectionHandlerRef.current = null;
     tilesetRef.current = null;
     measurementPointsRef.current = [];
+    selectedPointRef.current = null;
     if (viewerRef.current && !viewerRef.current.isDestroyed?.()) {
       viewerRef.current.destroy();
     }
@@ -366,6 +422,8 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
     setBoundaryStatus("loading");
     setMeasurementEnabled(false);
     setMeasurement(null);
+    setPickEnabled(false);
+    setSelectedPoint(null);
     setMeasurementHint(
       "Load an approved metric tileset to enable distance measurement."
     );
@@ -397,7 +455,8 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
       viewer.scene.globe.showGroundAtmosphere = false;
       viewer.scene.skyAtmosphere.show = false;
       viewer.scene.fog.enabled = false;
-      viewer.scene.screenSpaceCameraController.minimumZoomDistance = 2;
+      viewer.scene.screenSpaceCameraController.minimumZoomDistance =
+        WALK_EYE_HEIGHT_M;
       viewer.scene.screenSpaceCameraController.maximumZoomDistance = 2_500_000;
       viewer.clock.currentTime = Cesium.JulianDate.fromIso8601(FIXED_SCENE_TIME);
       viewer.clock.shouldAnimate = false;
@@ -521,7 +580,10 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
 
     measurementHandlerRef.current?.destroy?.();
     measurementHandlerRef.current = null;
+    selectionHandlerRef.current?.destroy?.();
+    selectionHandlerRef.current = null;
     clearMeasurementEntities();
+    clearSelection();
     setMeasurementEnabled(false);
     setMeasurement(null);
     setMeasurementHint(
@@ -544,6 +606,7 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
           const tileset = await Cesium.Cesium3DTileset.fromUrl(
             selectedEpoch.metricTilesetUrl,
             {
+              enableCollision: true,
               maximumScreenSpaceError:
                 QUALITY_SETTINGS[currentQualityRef.current]
                   .maximumScreenSpaceError
@@ -557,6 +620,7 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
           loadedTileset = tileset;
           tilesetRef.current = tileset;
           viewer.scene.primitives.add(tileset);
+          applyBookmark(currentBookmarkRef.current);
           setModelStatus("streaming");
           setModelDetail(
             `Epoch ${selectedEpoch.id} metadata loaded; waiting for its first visible metric tile.`
@@ -565,7 +629,7 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
             if (!disposed && tilesetRef.current === tileset) {
               setModelStatus("ready");
               setModelDetail(
-                `Epoch ${selectedEpoch.id} is visible. Mesh-surface distance measurement is enabled for this epoch.`
+                `Epoch ${selectedEpoch.id} is visible. Mesh picking, distance, and collision navigation are enabled.`
               );
               setMeasurementHint(
                 "Select Measure distance, then click two points on the metric mesh."
@@ -600,7 +664,9 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
     };
   }, [
     boundaryStatus,
+    applyBookmark,
     clearMeasurementEntities,
+    clearSelection,
     engineStatus,
     metricConfigured,
     metricPermitted,
@@ -635,18 +701,18 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
     const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
     measurementHandlerRef.current = handler;
     handler.setInputAction((movement: any) => {
-      const ray = viewer.camera.getPickRay(movement.position);
-      const picked = ray ? viewer.scene.drillPickFromRay(ray, 20) : [];
-      const metricHit = picked.find((candidate: any) =>
-        belongsToTileset(candidate.object, tileset)
+      const point = pickMetricPosition(
+        viewer,
+        Cesium,
+        tileset,
+        movement.position
       );
-      if (!metricHit || !Cesium.defined(metricHit.position)) {
+      if (!point) {
         setMeasurementHint(
           "That point is not on the approved metric tileset. Choose the visible mesh."
         );
         return;
       }
-      const point = metricHit.position;
 
       measurementPointsRef.current.push(point);
       const index = measurementPointsRef.current.length;
@@ -704,6 +770,73 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
   ]);
 
   useEffect(() => {
+    selectionHandlerRef.current?.destroy?.();
+    selectionHandlerRef.current = null;
+
+    const viewer = viewerRef.current;
+    const Cesium = window.Cesium;
+    const tileset = tilesetRef.current;
+    if (
+      !pickEnabled ||
+      !metricReady ||
+      !viewer ||
+      !Cesium ||
+      !tileset ||
+      viewer.isDestroyed?.()
+    ) {
+      return;
+    }
+
+    setSelectionHint("Click one point on the visible metric mesh.");
+    const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+    selectionHandlerRef.current = handler;
+    handler.setInputAction((movement: any) => {
+      const point = pickMetricPosition(
+        viewer,
+        Cesium,
+        tileset,
+        movement.position
+      );
+      if (!point) {
+        setSelectionHint("That click missed the metric mesh. Try a visible surface.");
+        return;
+      }
+
+      viewer.entities.removeById(SELECTION_ENTITY_ID);
+      viewer.entities.add({
+        id: SELECTION_ENTITY_ID,
+        position: point,
+        point: {
+          color: Cesium.Color.fromCssColorString("#5ef2ad"),
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 2,
+          pixelSize: 12,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY
+        }
+      });
+      selectedPointRef.current = Cesium.Cartesian3.clone(point);
+      orbitHeadingRef.current = viewer.camera.heading;
+      setSelectedPoint(toReadout(Cesium, point));
+      setSelectionHint(
+        "Point fixed in ECEF. Orbit it, enter at ground level, or copy its coordinates."
+      );
+      setPickEnabled(false);
+      viewer.scene.requestRender?.();
+    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+    return () => {
+      if (selectionHandlerRef.current === handler) {
+        handler.destroy();
+        selectionHandlerRef.current = null;
+      }
+    };
+  }, [metricReady, pickEnabled, reloadToken]);
+
+  useEffect(() => {
+    if (engineStatus !== "ready" || !window.Cesium) {
+      return;
+    }
+
     const setCesiumControls = (enabled: boolean) => {
       const controller =
         viewerRef.current?.scene?.screenSpaceCameraController;
@@ -737,7 +870,20 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
         return;
       }
       const key = event.key.toLowerCase();
-      if (["w", "a", "s", "d", "q", "e", "shift"].includes(key)) {
+      if (key === "f" && !event.repeat) {
+        event.preventDefault();
+        const nextMode =
+          navigationModeRef.current === "walk" ? "fly" : "walk";
+        navigationModeRef.current = nextMode;
+        walkLandingRef.current = nextMode === "walk";
+        setNavigationMode(nextMode);
+        return;
+      }
+      if (
+        ["w", "a", "s", "d", "q", "e", "shift", " ", "control"].includes(
+          key
+        )
+      ) {
         event.preventDefault();
         flyKeysRef.current.add(key);
       }
@@ -754,21 +900,150 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
       viewer.camera.lookUp(-event.movementY * 0.0017);
     };
 
+    const Cesium = window.Cesium;
+    const scratchUp = Cesium ? new Cesium.Cartesian3() : null;
+    const scratchForward = Cesium ? new Cesium.Cartesian3() : null;
+    const scratchRight = Cesium ? new Cesium.Cartesian3() : null;
+    const scratchScaled = Cesium ? new Cesium.Cartesian3() : null;
+    const scratchOrigin = Cesium ? new Cesium.Cartesian3() : null;
+    const scratchDown = Cesium ? new Cesium.Cartesian3() : null;
+    const scratchEye = Cesium ? new Cesium.Cartesian3() : null;
+
+    const snapWalkToMesh = (viewer: any, force = false) => {
+      const tileset = tilesetRef.current;
+      if (!Cesium || !tileset || !scratchUp) {
+        return;
+      }
+      const camera = viewer.camera;
+      Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(
+        camera.positionWC,
+        scratchUp
+      );
+      Cesium.Cartesian3.multiplyByScalar(scratchUp, 10, scratchScaled);
+      Cesium.Cartesian3.add(camera.positionWC, scratchScaled, scratchOrigin);
+      Cesium.Cartesian3.negate(scratchUp, scratchDown);
+      const hits = viewer.scene.drillPickFromRay(
+        new Cesium.Ray(scratchOrigin, scratchDown),
+        20
+      );
+      const ground = hits.find(
+        (candidate: any) =>
+          belongsToTileset(candidate.object, tileset) &&
+          Cesium.defined(candidate.position)
+      );
+      if (!ground) {
+        return;
+      }
+      Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(
+        ground.position,
+        scratchUp
+      );
+      Cesium.Cartesian3.multiplyByScalar(
+        scratchUp,
+        WALK_EYE_HEIGHT_M,
+        scratchScaled
+      );
+      Cesium.Cartesian3.add(ground.position, scratchScaled, scratchEye);
+      if (
+        force ||
+        Cesium.Cartesian3.distance(camera.positionWC, scratchEye) <= 3
+      ) {
+        Cesium.Cartesian3.clone(scratchEye, camera.position);
+      }
+    };
+
     let previousTime = performance.now();
     const flyFrame = (time: number) => {
       const viewer = viewerRef.current;
       const elapsedSeconds = Math.min((time - previousTime) / 1000, 0.1);
       previousTime = time;
-      if (flyActiveRef.current && viewer && !viewer.isDestroyed?.()) {
+      if (
+        flyActiveRef.current &&
+        viewer &&
+        Cesium &&
+        scratchUp &&
+        !viewer.isDestroyed?.()
+      ) {
         const keys = flyKeysRef.current;
-        const speed = keys.has("shift") ? 34 : 8.5;
+        const walking = navigationModeRef.current === "walk";
+        const speed = walking
+          ? keys.has("shift")
+            ? 5.5
+            : 2.2
+          : keys.has("shift")
+            ? 28
+            : 8;
         const distance = speed * elapsedSeconds;
-        if (keys.has("w")) viewer.camera.moveForward(distance);
-        if (keys.has("s")) viewer.camera.moveBackward(distance);
-        if (keys.has("a")) viewer.camera.moveLeft(distance);
-        if (keys.has("d")) viewer.camera.moveRight(distance);
-        if (keys.has("q")) viewer.camera.moveDown(distance);
-        if (keys.has("e")) viewer.camera.moveUp(distance);
+        let moved = false;
+
+        if (walking) {
+          const camera = viewer.camera;
+          if (walkLandingRef.current) {
+            snapWalkToMesh(viewer, true);
+            walkLandingRef.current = false;
+          }
+          Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(
+            camera.positionWC,
+            scratchUp
+          );
+          const vertical = Cesium.Cartesian3.dot(
+            camera.directionWC,
+            scratchUp
+          );
+          Cesium.Cartesian3.multiplyByScalar(
+            scratchUp,
+            vertical,
+            scratchScaled
+          );
+          Cesium.Cartesian3.subtract(
+            camera.directionWC,
+            scratchScaled,
+            scratchForward
+          );
+          if (Cesium.Cartesian3.magnitudeSquared(scratchForward) > 1e-8) {
+            Cesium.Cartesian3.normalize(scratchForward, scratchForward);
+            Cesium.Cartesian3.cross(
+              scratchForward,
+              scratchUp,
+              scratchRight
+            );
+            Cesium.Cartesian3.normalize(scratchRight, scratchRight);
+            if (keys.has("w")) {
+              camera.move(scratchForward, distance);
+              moved = true;
+            }
+            if (keys.has("s")) {
+              camera.move(scratchForward, -distance);
+              moved = true;
+            }
+            if (keys.has("a")) {
+              camera.move(scratchRight, -distance);
+              moved = true;
+            }
+            if (keys.has("d")) {
+              camera.move(scratchRight, distance);
+              moved = true;
+            }
+          }
+          if (moved) {
+            snapWalkToMesh(viewer);
+          }
+        } else {
+          Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(
+            viewer.camera.positionWC,
+            scratchUp
+          );
+          if (keys.has("w")) viewer.camera.moveForward(distance);
+          if (keys.has("s")) viewer.camera.moveBackward(distance);
+          if (keys.has("a")) viewer.camera.moveLeft(distance);
+          if (keys.has("d")) viewer.camera.moveRight(distance);
+          if (keys.has("q") || keys.has("control")) {
+            viewer.camera.move(scratchUp, -distance);
+          }
+          if (keys.has("e") || keys.has(" ")) {
+            viewer.camera.move(scratchUp, distance);
+          }
+        }
       }
       flyFrameRef.current = window.requestAnimationFrame(flyFrame);
     };
@@ -794,7 +1069,7 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
       }
       setCesiumControls(true);
     };
-  }, []);
+  }, [engineStatus]);
 
   const selectBookmark = (nextBookmark: BookmarkId) => {
     applyBookmark(nextBookmark);
@@ -818,23 +1093,100 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
     );
   };
 
-  const enterFlyMode = async () => {
-    const canvas = viewerRef.current?.scene?.canvas as
+  const orbitSelected = (deltaDegrees: number) => {
+    const viewer = viewerRef.current;
+    const Cesium = window.Cesium;
+    const anchor = selectedPointRef.current;
+    if (!viewer || !Cesium || !anchor || viewer.isDestroyed?.()) {
+      setSelectionHint("Pick a metric-mesh point before using local-up orbit.");
+      return;
+    }
+    const transform = Cesium.Transforms.eastNorthUpToFixedFrame(anchor);
+    const range = Math.min(
+      450,
+      Math.max(8, Cesium.Cartesian3.distance(viewer.camera.positionWC, anchor))
+    );
+    orbitHeadingRef.current += Cesium.Math.toRadians(deltaDegrees);
+    viewer.camera.lookAtTransform(
+      transform,
+      new Cesium.HeadingPitchRange(
+        orbitHeadingRef.current,
+        Cesium.Math.toRadians(-32),
+        range
+      )
+    );
+    viewer.scene.requestRender?.();
+  };
+
+  const enterWorld = async () => {
+    const viewer = viewerRef.current;
+    const Cesium = window.Cesium;
+    const anchor = selectedPointRef.current;
+    const canvas = viewer?.scene?.canvas as
       | HTMLCanvasElement
       | undefined;
-    if (!canvas) {
-      setRuntimeError("The 3D canvas is not ready for fly mode.");
+    if (!viewer || !Cesium || !canvas || !anchor) {
+      setPickEnabled(true);
+      setMeasurementEnabled(false);
+      setSelectionHint(
+        "Pick a clear ground point first; Enter world will place the camera 1.7 m above it."
+      );
       return;
     }
     try {
+      const up = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(
+        anchor,
+        new Cesium.Cartesian3()
+      );
+      const eye = Cesium.Cartesian3.add(
+        anchor,
+        Cesium.Cartesian3.multiplyByScalar(
+          up,
+          WALK_EYE_HEIGHT_M,
+          new Cesium.Cartesian3()
+        ),
+        new Cesium.Cartesian3()
+      );
+      const enu = Cesium.Transforms.eastNorthUpToFixedFrame(anchor);
+      const north = Cesium.Matrix4.multiplyByPointAsVector(
+        enu,
+        Cesium.Cartesian3.UNIT_Y,
+        new Cesium.Cartesian3()
+      );
+      Cesium.Cartesian3.normalize(north, north);
+      viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+      viewer.camera.setView({
+        destination: eye,
+        orientation: { direction: north, up }
+      });
+      navigationModeRef.current = "walk";
+      setNavigationMode("walk");
       canvas.focus();
       await canvas.requestPointerLock();
     } catch (error) {
       setRuntimeError(
-        `Fly mode could not start: ${
+        `World mode could not start: ${
           error instanceof Error ? error.message : String(error)
         }`
       );
+    }
+  };
+
+  const copySelectedCoordinates = async () => {
+    if (!selectedPoint) {
+      return;
+    }
+    const value = [
+      `WGS84 ${selectedPoint.latitude.toFixed(8)}, ${selectedPoint.longitude.toFixed(8)}`,
+      `ellipsoid_h_m ${selectedPoint.height.toFixed(3)}`,
+      `ECEF_m ${selectedPoint.x.toFixed(3)}, ${selectedPoint.y.toFixed(3)}, ${selectedPoint.z.toFixed(3)}`,
+      `epoch ${selectedEpoch.id}`
+    ].join("\n");
+    try {
+      await navigator.clipboard.writeText(value);
+      setSelectionHint("WGS84 and ECEF coordinates copied.");
+    } catch {
+      setSelectionHint("Clipboard access was denied; coordinates remain visible below.");
     }
   };
 
@@ -851,7 +1203,7 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
 
   return (
     <main
-      className="viewer-shell"
+      className={`viewer-shell${flyActive ? " world-active" : ""}`}
       data-testid={metricReady ? "viewer-ready" : undefined}
       data-shell-ready={shellReady ? "true" : "false"}
       data-map-epoch={selectedEpoch.id}
@@ -883,17 +1235,17 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
             SM
           </span>
           <div>
-            <p className="eyebrow">Public 3D record</p>
             <h1>Saint Martins Cemetery</h1>
           </div>
         </div>
-        <div className="warning-chip" role="note">
-          <span aria-hidden="true">△</span>
-          GPS-scaled photogrammetry — not survey grade
+        <div className="lab-chip" role="status">
+          <span className={`status-dot status-${modelStatus}`} aria-hidden="true" />
+          LAB · {selectedEpoch.captureDate}
         </div>
       </header>
 
-      <nav className="timeline-panel panel" aria-label="Map timeline">
+      {config.epochs.length > 1 ? (
+        <nav className="timeline-panel panel" aria-label="Map timeline">
         <div className="timeline-heading">
           <span>
             <span className="eyebrow">Temporal record</span>
@@ -933,56 +1285,21 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
           Selected map epoch {selectedEpoch.captureDate}, {selectedEpoch.label}.
           Metric release {releaseGateOpen ? "permitted" : "held"}.
         </p>
-      </nav>
+        </nav>
+      ) : null}
 
-      <aside className="status-panel panel" aria-label="Model and release status">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Release state</p>
-            <h2>Model status</h2>
-          </div>
-          <span className={`status-dot status-${modelStatus}`} aria-hidden="true" />
-        </div>
+      <p className="sr-only" aria-live="polite">
+        Cesium {statusLabel(engineStatus)}. Boundary {statusLabel(boundaryStatus)}.
+        Model {statusLabel(modelStatus)}. {modelDetail}
+      </p>
 
-        <dl className="status-list">
+      <details className="camera-panel panel control-drawer">
+        <summary className="drawer-summary">View</summary>
+        <div className="drawer-body" aria-label="Camera presets">
+          <div className="panel-heading compact">
           <div>
-            <dt>Cesium engine</dt>
-            <dd>{statusLabel(engineStatus)}</dd>
-          </div>
-          <div>
-            <dt>OSM boundary</dt>
-            <dd>{statusLabel(boundaryStatus)}</dd>
-          </div>
-          <div>
-            <dt>Metric model</dt>
-            <dd>{statusLabel(modelStatus)}</dd>
-          </div>
-          <div>
-            <dt>Release ID</dt>
-            <dd className="mono">{selectedEpoch.releaseId}</dd>
-          </div>
-          <div>
-            <dt>Capture</dt>
-            <dd>{selectedEpoch.captureDate}</dd>
-          </div>
-        </dl>
-
-        <p className="status-detail">{modelDetail}</p>
-        <div className="gate-row">
-          <span className={selectedEpoch.publicReleaseApproved ? "pass" : "hold"}>
-            Release {selectedEpoch.publicReleaseApproved ? "approved" : "held"}
-          </span>
-          <span className={selectedEpoch.privacyCropVerified ? "pass" : "hold"}>
-            Crop {selectedEpoch.privacyCropVerified ? "verified" : "unverified"}
-          </span>
-        </div>
-      </aside>
-
-      <section className="camera-panel panel" aria-label="Camera presets">
-        <div className="panel-heading compact">
-          <div>
-            <p className="eyebrow">Deterministic views</p>
-            <h2>Camera</h2>
+            <p className="eyebrow">Cesium camera</p>
+            <h2>Navigate</h2>
           </div>
           <select
             className="quality-select"
@@ -996,8 +1313,8 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
               </option>
             ))}
           </select>
-        </div>
-        <div className="preset-grid">
+          </div>
+          <div className="preset-grid">
           {CAMERA_PRESETS.map((preset) => (
             <button
               key={preset.id}
@@ -1009,42 +1326,83 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
               {preset.label}
             </button>
           ))}
-        </div>
-        <button
+          </div>
+          <div className="orbit-grid">
+          <button
+            type="button"
+            disabled={!selectedPoint}
+            onClick={() => orbitSelected(-15)}
+          >
+            ↶ Local up
+          </button>
+          <button
+            type="button"
+            disabled={!selectedPoint}
+            onClick={() => orbitSelected(15)}
+          >
+            Local up ↷
+          </button>
+          </div>
+          <button
           type="button"
           className={`fly-button ${flyActive ? "active" : ""}`}
           onClick={() => {
             if (flyActive) {
               document.exitPointerLock();
             } else {
-              void enterFlyMode();
+              void enterWorld();
             }
           }}
-          disabled={!shellReady}
+          disabled={!metricReady}
         >
-          {flyActive ? "Exit fly mode" : "Enter fly mode"}
-        </button>
-        <p className="control-help">
-          WASD move · Q/E descend/ascend · mouse look · Shift sprint · Esc release
-        </p>
-      </section>
+          {flyActive
+            ? `Exit ${navigationMode} mode`
+            : selectedPoint
+              ? "Enter world"
+              : "Pick ground to enter"}
+          </button>
+          <p className="control-help">
+            WASD · mouse · Shift · F walk/fly
+            {navigationMode === "fly" ? " · Space/Q up/down" : ""} · Esc
+          </p>
+        </div>
+      </details>
 
-      <section className="measure-panel panel" aria-label="Metric measurement">
-        <div className="panel-heading compact">
+      <details className="measure-panel panel control-drawer">
+        <summary className="drawer-summary">Point / measure</summary>
+        <div className="drawer-body" aria-label="Spatial tools">
+          <div className="panel-heading compact">
           <div>
-            <p className="eyebrow">Mesh authority</p>
-            <h2>Distance</h2>
+            <p className="eyebrow">Metric mesh</p>
+            <h2>Point &amp; distance</h2>
           </div>
           <span className={metricReady ? "authority-on" : "authority-off"}>
-            {metricReady ? "Metric mesh" : "Disabled"}
+            {metricReady ? "Ready" : "Disabled"}
           </span>
-        </div>
-        <p className="measure-hint" aria-live="polite">
-          {measurementHint}
-        </p>
-        {measurement ? (
+          </div>
+          <p className="measure-hint" aria-live="polite">
+          {measurementEnabled ? measurementHint : selectionHint}
+          </p>
+          {selectedPoint ? (
+          <div className="selection-result">
+            <span>
+              WGS84 lon {selectedPoint.longitude.toFixed(7)} · lat{" "}
+              {selectedPoint.latitude.toFixed(7)}
+            </span>
+            <small>ellipsoid h {selectedPoint.height.toFixed(2)} m</small>
+            <small>
+              ECEF X {selectedPoint.x.toFixed(2)} · Y {selectedPoint.y.toFixed(2)}
+              {" · "}Z {selectedPoint.z.toFixed(2)} m
+            </small>
+            <button type="button" onClick={() => void copySelectedCoordinates()}>
+              Copy WGS84 + ECEF
+            </button>
+          </div>
+          ) : null}
+          {measurement ? (
           <div className="measurement-result">
             <strong>{measurement.distance.toFixed(3)} m</strong>
+            <span>3D straight ECEF distance</span>
             <span>
               A {measurement.pointA.longitude.toFixed(7)},{" "}
               {measurement.pointA.latitude.toFixed(7)} · h{" "}
@@ -1056,44 +1414,66 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
               {measurement.pointB.height.toFixed(2)} m
             </span>
           </div>
-        ) : null}
-        <div className="measure-actions">
+          ) : null}
+          <div className="measure-actions tool-actions">
+          <button
+            type="button"
+            className={pickEnabled ? "active" : ""}
+            disabled={!metricReady}
+            onClick={() => {
+              setMeasurementEnabled(false);
+              setPickEnabled((enabled) => !enabled);
+            }}
+          >
+            {pickEnabled ? "Cancel pick" : "Pick point"}
+          </button>
           <button
             type="button"
             className={measurementEnabled ? "active" : ""}
             disabled={!metricReady}
-            onClick={() => setMeasurementEnabled((enabled) => !enabled)}
+            onClick={() => {
+              setPickEnabled(false);
+              setMeasurementEnabled((enabled) => !enabled);
+            }}
           >
-            {measurementEnabled ? "Stop measuring" : "Measure distance"}
+            {measurementEnabled ? "Cancel measure" : "Measure"}
           </button>
-          <button type="button" onClick={resetMeasurement}>
+          <button
+            type="button"
+            onClick={() => {
+              resetMeasurement();
+              clearSelection();
+            }}
+          >
             Clear
           </button>
+          </div>
         </div>
-      </section>
+      </details>
 
       <details className="next-flight-panel panel">
         <summary>
           <span className="next-flight-title">
-            <span className="eyebrow">Measured capture prescription</span>
-            <strong>Next flight</strong>
-          </span>
-          <span className="next-flight-summary">
-            Autel EVO II Pro Enterprise V3 RTK
+            <strong>Flight</strong>
           </span>
         </summary>
         <div className="next-flight-body">
+          <p className="flight-aircraft">
+            Autel EVO II Pro Enterprise V3 RTK
+          </p>
           <section aria-labelledby="camera-lock-heading">
             <h3 id="camera-lock-heading">Camera lock</h3>
             <ul className="flight-checks">
               <li>
-                ND filters <strong>off by default</strong>; no digital zoom, HDR,
-                or AEB.
+                ND8/ND16 filters <strong>off</strong> unless full sun still
+                overexposes at ISO 100, f/4, and the required fast shutter; no
+                digital zoom, HDR, or AEB.
               </li>
               <li>
                 Full <strong>5472 × 3648</strong>, 3:2, wide camera.
-                Use JPG for the 2 s cadence; DNG needs at least 5 s or a
-                settled capture.
+                Use JPG for the 2 s route cadence; reserve DNG/JPG+DNG for
+                settled detail captures if the controller cannot sustain that
+                interval.
               </li>
               <li>
                 Manual <strong>1/1000 s target</strong>; 1/800 s moving-flight
@@ -1102,7 +1482,10 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
               <li>
                 Prefer f/4; open to f/2.8 before allowing a slower shutter.
               </li>
-              <li>ISO 100–800; lock white balance and focus.</li>
+              <li>
+                Start ISO 100, cap at 400 (800 only to protect shutter); lock
+                white balance and focus after a test frame.
+              </li>
             </ul>
           </section>
 
@@ -1112,7 +1495,7 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
               Require RTK <strong>FIX</strong> before production routes. Preserve
               raw satellite observations and flight logs; record the
               base/NTRIP correction source, datum, and firmware; measure
-              independent checkpoints.
+              independent checkpoints. Altitudes are above takeoff, not canopy.
             </p>
           </section>
 
@@ -1135,119 +1518,72 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
                   <tr>
                     <th scope="row">Global block</th>
                     <td>
-                      30 m AGL · −90° nadir + four −45° to −50° oblique
-                      headings · 83/80 overlap
+                      Highest canopy + terrain rise + 15 m. If verified canopy is
+                      30 m and terrain is level: <strong>45 m / 148 ft</strong>
+                      · −90° · 83/80 overlap
                     </td>
-                    <td>1.5 m/s · 2 s</td>
+                    <td>3 m/s · 10.8 km/h max · 2 s</td>
                   </tr>
                   <tr>
-                    <th scope="row">Upright detail</th>
+                    <th scope="row">Oblique block</th>
                     <td>
-                      10 m AGL · −25° · N/S/E/W · ≤5 m line spacing
+                      Same verified safe altitude · −45° to −50° · opposing
+                      cross-grid headings · 80/80 overlap
                     </td>
-                    <td>1 m/s · 2 s</td>
+                    <td>2.5 m/s · 9 km/h · 2 s</td>
                   </tr>
                   <tr>
-                    <th scope="row">Facades</th>
+                    <th scope="row">Upright/facade</th>
                     <td>
-                      8–15 m stand-off · −10° to −25° · five azimuth offsets
+                      Only walked, visually cleared corridors: 15–20 m above
+                      local ground · 10–15 m stand-off · −15° to −35° · opposing
+                      headings
                     </td>
-                    <td>1–2 m stations · ≤0.5 m/s or settled hover</td>
+                    <td>1 m/s · 3.6 km/h or 2–3 m settled stations</td>
                   </tr>
                 </tbody>
               </table>
             </div>
             <p className="azimuth-note">
-              Facade azimuth offsets: −60°, −30°, 0°, +30°, +60°.
+              Battery 1: proof strip + nadir. Batteries 2 and 3: perpendicular
+              safe-altitude oblique grids. Recharge before cleared detail
+              corridors or settled facade stations.
             </p>
           </section>
 
           <p className="flight-safety-note">
-            Execute only with site authorization and a walked obstacle check;
-            increase altitude for actual obstacles.
+            Walk the site first. Treat sensing as last-resort braking, not a
+            branch/wire route planner. Abort if RTK leaves FIX, exposure drifts,
+            the aircraft brakes/holds, or the route loses clearance.
           </p>
         </div>
       </details>
 
-      <aside className="disclosure-panel panel" aria-label="Accuracy and privacy">
-        <p className="eyebrow">Read before use</p>
-        <h2>Accuracy &amp; privacy</h2>
-        <p>
-          This is GPS-scaled photogrammetry, not a boundary or land survey. Do
-          not use it for legal, engineering, excavation, or navigation decisions.
-          {" "}Absolute accuracy: unvalidated.
-        </p>
-        <p>
-          Camera metadata reports median stated GNSS accuracies of 0.847 m
-          horizontal and 2.597 m vertical. Those metadata values are not
-          demonstrated reconstruction accuracy.
-        </p>
-        <p>
-          The selected triangulation reconstruction&apos;s measured average
-          GNSS-prior residual was 3.125 m. It also does not establish survey
-          accuracy.
-        </p>
-        <p>
-          Public mesh loading is fail-closed until a physical privacy crop and
-          release approval are verified. Browser clipping is not a privacy
-          control.
-        </p>
-        {metricPermitted ? (
-          <p>
-            This epoch is a physically cropped public derivative; source
-            photographs and camera metadata are not published. Inscriptions
-            are not OCR-indexed or made searchable by this viewer.
-          </p>
-        ) : null}
-        <p>
-          The green outline is an OpenStreetMap screening proxy, not proof of a
-          legal parcel boundary, ownership, access, authorization, or
-          publication rights.
-        </p>
-        <div className="attribution">
-          {metricConfigured ? (
-            <span>
-              3D model © 2026 {selectedEpoch.contentAttribution} ·{" "}
-              <a
-                href={selectedEpoch.contentLicenseUrl}
-                rel="license noreferrer"
-                target="_blank"
-              >
-                {selectedEpoch.contentLicense}
-              </a>
-              <br />
-            </span>
-          ) : null}
-          Boundary © OpenStreetMap contributors · ODbL 1.0 ·{" "}
-          <a href="/third-party-notices.txt">Third-party notices</a>
-        </div>
-      </aside>
+      {flyActive ? (
+        <>
+          <span className="world-reticle" aria-hidden="true" />
+          <div className="world-hud" role="status">
+            {navigationMode.toUpperCase()} · F toggles · Esc releases
+          </div>
+        </>
+      ) : null}
 
-      <footer className="coordinate-bar">
-        <div>
-          <span className="coordinate-label">Navigation position · WGS84</span>
-          {cameraReadout ? (
-            <span className="mono">
-              {cameraReadout.longitude.toFixed(7)}°,{" "}
-              {cameraReadout.latitude.toFixed(7)}° · ellipsoid h{" "}
-              {cameraReadout.height.toFixed(2)} m
-            </span>
-          ) : (
-            <span>Waiting for camera…</span>
-          )}
-        </div>
-        <div>
-          <span className="coordinate-label">ECEF Cartesian · metres</span>
-          {cameraReadout ? (
-            <span className="mono">
-              X {cameraReadout.x.toFixed(2)} · Y {cameraReadout.y.toFixed(2)} · Z{" "}
-              {cameraReadout.z.toFixed(2)}
-            </span>
-          ) : (
-            <span>—</span>
-          )}
-        </div>
-      </footer>
+      <div className="scene-credit">
+        {metricConfigured ? (
+          <>
+            © {selectedEpoch.contentAttribution} ·{" "}
+            <a
+              href={selectedEpoch.contentLicenseUrl}
+              rel="license noreferrer"
+              target="_blank"
+            >
+              {selectedEpoch.contentLicense}
+            </a>
+            {" · "}
+          </>
+        ) : null}
+        <a href="/third-party-notices.txt">credits</a>
+      </div>
 
       {engineStatus === "loading" || boundaryStatus === "loading" ? (
         <div className="loading-card" role="status" aria-live="polite">
