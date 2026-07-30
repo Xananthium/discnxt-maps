@@ -75,6 +75,8 @@ button {
 
 .cesium-viewer-bottom {
   bottom: 68px !important;
+  left: 320px !important;
+  right: 320px !important;
   z-index: 3;
 }
 
@@ -898,6 +900,11 @@ button:disabled {
   .viewer-shell {
     min-height: 1380px;
     height: auto;
+  }
+
+  .cesium-viewer-bottom {
+    left: 0 !important;
+    right: 0 !important;
   }
 
   .topbar {
