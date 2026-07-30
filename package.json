@@ -2,6 +2,7 @@
   "name": "saint-martins-cemetery-public-viewer",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "Local public-viewer prototype for a governed metric cemetery release.",
   "scripts": {
     "dev": "next dev",

@@ -102,6 +102,8 @@ with its license notices intact.
 only a privacy-screening proxy, not proof of a legal parcel boundary, ownership,
 access, authorization, or publication rights.
 
+The viewer source is community software under the [MIT License](LICENSE).
+
 ## Verification and local OpenNext packaging
 
 ```powershell
