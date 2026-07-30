@@ -5,6 +5,9 @@ export interface PublicMapEpoch {
   readonly releaseId: string;
   readonly modelStatusLabel: string;
   readonly metricTilesetUrl: string;
+  readonly contentAttribution: string;
+  readonly contentLicense: string;
+  readonly contentLicenseUrl: string;
   readonly publicReleaseApproved: boolean;
   readonly privacyCropVerified: boolean;
 }

@@ -53,16 +53,22 @@ Each entry has exactly these fields:
   "releaseId": "unique-versioned-release-id",
   "modelStatusLabel": "Public status text.",
   "metricTilesetUrl": "https://assets.example/release-id/tileset.json",
+  "contentAttribution": "Rights-holder name",
+  "contentLicense": "License identifier",
+  "contentLicenseUrl": "https://example.org/license",
   "publicReleaseApproved": false,
   "privacyCropVerified": false
 }
 ```
 
 `id` and `captureDate` must match. Asset URLs must be HTTPS or root-relative.
-The parser rejects unknown fields, malformed dates/URLs, string-valued gates,
-duplicate IDs, duplicate release IDs, and manifests without the baseline. Any
-one invalid entry rejects the entire manifest and restores a locked,
-boundary-only baseline; it never partially accepts an epoch list.
+An epoch with no tileset must leave all three content-license fields empty; an
+epoch with a tileset must provide a bounded attribution and license plus an
+HTTPS license URL. The parser rejects unknown fields, malformed dates/URLs,
+incomplete content licensing, string-valued gates, duplicate IDs, duplicate
+release IDs, and manifests without the baseline. Any one invalid entry rejects
+the entire manifest and restores a locked, boundary-only baseline; it never
+partially accepts an epoch list.
 
 ## Controls and authority
 
@@ -103,6 +109,10 @@ only a privacy-screening proxy, not proof of a legal parcel boundary, ownership,
 access, authorization, or publication rights.
 
 The viewer source is community software under the [MIT License](LICENSE).
+Compiled/runtime notices are published at
+`/third-party-notices.txt`. Every released metric epoch carries its own visible
+model attribution and content license; the viewer's MIT license does not apply
+to model data automatically.
 
 ## Verification and local OpenNext packaging
 

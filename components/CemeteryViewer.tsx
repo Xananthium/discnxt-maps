@@ -859,6 +859,8 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
       data-testid={metricReady ? "viewer-ready" : undefined}
       data-shell-ready={shellReady ? "true" : "false"}
       data-map-epoch={selectedEpoch.id}
+      data-release-id={selectedEpoch.releaseId}
+      data-model-status={modelStatus}
     >
       <Script
         src={config.cesiumScriptUrl}
@@ -1177,6 +1179,7 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
         <p>
           This is GPS-scaled photogrammetry, not a boundary or land survey. Do
           not use it for legal, engineering, excavation, or navigation decisions.
+          {" "}Absolute accuracy: unvalidated.
         </p>
         <p>
           Camera metadata reports median stated GNSS accuracies of 0.847 m
@@ -1193,13 +1196,34 @@ export default function CemeteryViewer({ config }: { config: ViewerConfig }) {
           release approval are verified. Browser clipping is not a privacy
           control.
         </p>
+        {metricPermitted ? (
+          <p>
+            This epoch is a physically cropped public derivative; source
+            photographs and camera metadata are not published. Inscriptions
+            are not OCR-indexed or made searchable by this viewer.
+          </p>
+        ) : null}
         <p>
           The green outline is an OpenStreetMap screening proxy, not proof of a
           legal parcel boundary, ownership, access, authorization, or
           publication rights.
         </p>
         <div className="attribution">
-          Boundary © OpenStreetMap contributors · ODbL 1.0
+          {metricConfigured ? (
+            <span>
+              3D model © 2026 {selectedEpoch.contentAttribution} ·{" "}
+              <a
+                href={selectedEpoch.contentLicenseUrl}
+                rel="license noreferrer"
+                target="_blank"
+              >
+                {selectedEpoch.contentLicense}
+              </a>
+              <br />
+            </span>
+          ) : null}
+          Boundary © OpenStreetMap contributors · ODbL 1.0 ·{" "}
+          <a href="/third-party-notices.txt">Third-party notices</a>
         </div>
       </aside>
 

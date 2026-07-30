@@ -39,8 +39,8 @@ test("public payload contains no source imagery or private capture artifacts", a
   ]);
 
   assert.deepEqual(
-    files.map((path) => path.slice(publicRoot.length + 1)),
-    ["cemetery-boundary.geojson"]
+    files.map((path) => path.slice(publicRoot.length + 1)).sort(),
+    ["cemetery-boundary.geojson", "third-party-notices.txt"]
   );
   for (const path of files) {
     assert.equal(
@@ -66,6 +66,20 @@ test("boundary is a closed, attributed OSM polygon with a legal-boundary warning
   assert.match(feature.properties.disclaimer, /not proof of a legal parcel boundary/i);
 });
 
+test("public notices retain runtime and map-data license attribution", async () => {
+  const notices = await readFile(
+    join(publicRoot, "third-party-notices.txt"),
+    "utf8"
+  );
+
+  assert.match(notices, /CesiumJS 1\.143/);
+  assert.match(notices, /Apache License 2\.0/);
+  assert.match(notices, /Next\.js 16\.2\.12/);
+  assert.match(notices, /React and React DOM 19\.2\.8/);
+  assert.match(notices, /OpenStreetMap contributors/);
+  assert.match(notices, /Open Database License 1\.0/);
+});
+
 test("viewer fails closed and exposes metric authority plus disclosures", async () => {
   const component = await readFile(
     join(viewerRoot, "components", "CemeteryViewer.tsx"),
@@ -87,10 +101,21 @@ test("viewer fails closed and exposes metric authority plus disclosures", async 
   assert.match(component, /FIXED_SCENE_TIME/);
   assert.match(component, /median stated GNSS accuracies of 0\.847 m/);
   assert.match(component, /average[\s\S]*GNSS-prior[\s\S]*3\.125 m/);
+  assert.match(component, /Absolute accuracy: unvalidated/);
+  assert.match(component, /physically cropped public derivative/);
+  assert.match(component, /source[\s\S]*photographs[\s\S]*not published/);
+  assert.match(component, /contentAttribution/);
+  assert.match(component, /contentLicenseUrl/);
+  assert.match(component, /third-party-notices\.txt/);
+  assert.match(component, /data-release-id=\{selectedEpoch\.releaseId\}/);
+  assert.match(component, /data-model-status=\{modelStatus\}/);
   assert.match(page, /NEXT_PUBLIC_MAP_EPOCHS_JSON/);
   assert.doesNotMatch(page, /NEXT_PUBLIC_METRIC_TILESET_URL/);
   assert.match(environment, /"id":"2026-07-29"/);
   assert.match(environment, /"metricTilesetUrl":""/);
+  assert.match(environment, /"contentAttribution":""/);
+  assert.match(environment, /"contentLicense":""/);
+  assert.match(environment, /"contentLicenseUrl":""/);
   assert.match(environment, /"publicReleaseApproved":false/);
   assert.match(environment, /"privacyCropVerified":false/);
   assert.equal("deploy" in packageJson.scripts, false);

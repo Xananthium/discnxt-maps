@@ -12,6 +12,9 @@ const baseline = {
   releaseId: "cemetery-2026-07-29-v1",
   modelStatusLabel: "Reviewed baseline.",
   metricTilesetUrl: "/epochs/2026-07-29/tileset.json",
+  contentAttribution: "Discnxt",
+  contentLicense: "CC BY 4.0",
+  contentLicenseUrl: "https://creativecommons.org/licenses/by/4.0/",
   publicReleaseApproved: true,
   privacyCropVerified: true
 };
@@ -23,6 +26,9 @@ const future = {
   releaseId: "cemetery-2026-08-15-v1",
   modelStatusLabel: "Awaiting privacy review.",
   metricTilesetUrl: "https://assets.example/2026-08-15/tileset.json",
+  contentAttribution: "Discnxt",
+  contentLicense: "CC BY 4.0",
+  contentLicenseUrl: "https://creativecommons.org/licenses/by/4.0/",
   publicReleaseApproved: false,
   privacyCropVerified: true
 };
@@ -32,6 +38,9 @@ function assertFailClosed(rawValue) {
   assert.equal(epochs.length, 1);
   assert.equal(epochs[0].id, BASELINE_EPOCH_ID);
   assert.equal(epochs[0].metricTilesetUrl, "");
+  assert.equal(epochs[0].contentAttribution, "");
+  assert.equal(epochs[0].contentLicense, "");
+  assert.equal(epochs[0].contentLicenseUrl, "");
   assert.equal(epochs[0].publicReleaseApproved, false);
   assert.equal(epochs[0].privacyCropVerified, false);
 }
@@ -45,6 +54,7 @@ test("valid epoch manifests are immutable, ordered, and retain per-epoch gates",
   );
   assert.equal(epochs[0].publicReleaseApproved, true);
   assert.equal(epochs[0].privacyCropVerified, true);
+  assert.equal(epochs[0].contentLicense, "CC BY 4.0");
   assert.equal(epochs[1].publicReleaseApproved, false);
   assert.equal(epochs[1].privacyCropVerified, true);
   assert.equal(Object.isFrozen(epochs), true);
@@ -87,5 +97,19 @@ test("missing or malformed epoch manifests fail closed as one atomic unit", () =
   );
   assertFailClosed(
     JSON.stringify([{ ...baseline, undocumentedOverride: true }])
+  );
+  assertFailClosed(
+    JSON.stringify([{ ...baseline, contentAttribution: "" }])
+  );
+  assertFailClosed(
+    JSON.stringify([
+      {
+        ...baseline,
+        contentLicenseUrl: "http://creativecommons.org/licenses/by/4.0/"
+      }
+    ])
+  );
+  assertFailClosed(
+    JSON.stringify([{ ...baseline, contentLicenseUrl: "/model-license" }])
   );
 });
